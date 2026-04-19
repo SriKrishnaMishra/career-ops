@@ -2,6 +2,26 @@
 
 <!-- Describe the change in 1-3 sentences -->
 
+### Suggested heading
+
+<!-- Write a clear title line that states intent and scope. -->
+<!-- Example: Build an open, free, extensible automation baseline without paid API lock-in -->
+
+### Why this approach?
+
+<!-- Explain why this matters (especially for feature/architecture PRs). -->
+<!-- Example points: open-source first, no paid API dependency, extensible design, community value -->
+
+### Vision and collaboration ask
+
+<!-- What do you want feedback on? -->
+<!-- Example: architecture, modularization, ranking logic, resume generation, ATS scoring -->
+
+### Current limitations (be explicit)
+
+<!-- List known limitations to build trust. -->
+<!-- Example: experimental status, limited tests, scalability/performance work pending -->
+
 ## Related issue
 
 <!-- REQUIRED: Link the issue this PR addresses. PRs without a related issue will be closed. -->

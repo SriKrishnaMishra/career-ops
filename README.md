@@ -60,6 +60,54 @@ Career-ops is agentic: Claude Code navigates career pages with Playwright, evalu
 
 Built by someone who used it to evaluate 740+ job offers, generate 100+ tailored CVs, and land a Head of Applied AI role. [Read the full case study](https://santifer.io/career-ops-system).
 
+## Why This Approach Matters
+
+Most job automation workflows today depend on paid APIs, closed platforms, or hard-to-customize stacks.
+
+Career-ops explores a different path:
+
+- **Fully open-source**: transparent, inspectable, and modifiable.
+- **Free-first workflows**: no mandatory paid API lock-in to start.
+- **Extensible architecture**: easy to adapt ranking logic, resume generation, and pipeline behavior.
+- **Community-driven improvement**: built to evolve through real-world contributor feedback.
+
+> **This work explores how job application automation can be made fully open, free, and extensible without relying on proprietary AI APIs.**
+
+## Problems This Project Solves
+
+- Manual and repetitive job tracking across many portals.
+- Poor visibility into which roles are actually worth applying to.
+- One-size-fits-all resumes that underperform in ATS filters.
+- Fragmented workflow across docs, spreadsheets, browsers, and notes.
+- High experimentation cost when workflows depend on paid AI APIs.
+
+## Vision
+
+The long-term goal is a community-maintained job application system where:
+
+- users automate repetitive steps while keeping final control,
+- developers contribute new modules and strategies,
+- AI, rules-based, and hybrid approaches can coexist.
+
+## Looking for Feedback and Contributors
+
+This project is experimental and actively evolving. Contributions are welcome in:
+
+- architecture and system design reviews,
+- pipeline reliability and modularization,
+- ranking logic improvements,
+- resume generation quality,
+- ATS scoring and evaluation quality.
+
+If you want to improve job application workflows in public, your input is valuable.
+
+## Current Limitations
+
+- Still experimental in several areas.
+- Modular boundaries can be improved.
+- Testing coverage can be expanded.
+- Performance and scalability can be improved.
+
 ## Features
 
 | Feature | Description |
