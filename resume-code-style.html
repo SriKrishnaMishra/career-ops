@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sri Krishna Mishra - Resume Code Style</title>
+  <style>
+    :root {
+      --bg: #0b0f14;
+      --panel: #111827;
+      --border: #2b3442;
+      --text: #d8dee9;
+      --comment: #7f8c98;
+      --keyword: #ff66b3;
+      --prop: #ffb454;
+      --string: #7ee787;
+      --value: #4fd1c5;
+      --number: #ffd166;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: radial-gradient(circle at 10% 5%, #1c2433, var(--bg) 40%, #070a10 100%);
+      color: var(--text);
+      font-family: "JetBrains Mono", "Fira Code", Consolas, monospace;
+      padding: 22px;
+    }
+
+    .window {
+      max-width: 980px;
+      margin: 0 auto;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 24px 56px rgba(0, 0, 0, 0.38);
+    }
+
+    .topbar {
+      background: #0f1522;
+      border-bottom: 1px solid var(--border);
+      padding: 10px 14px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+    }
+
+    .red { background: #ff5f56; }
+    .yellow { background: #ffbd2e; }
+    .green { background: #27c93f; }
+
+    .label {
+      color: #8ea0b5;
+      font-size: 12px;
+      margin-left: 6px;
+    }
+
+    pre {
+      margin: 0;
+      padding: 18px;
+      overflow: auto;
+      white-space: pre;
+      line-height: 1.65;
+      font-size: 14px;
+    }
+
+    .k { color: var(--keyword); }
+    .p { color: var(--prop); }
+    .s { color: var(--string); }
+    .v { color: var(--value); }
+    .n { color: var(--number); }
+    .c { color: var(--comment); }
+
+    @media (max-width: 768px) {
+      body { padding: 10px; }
+      pre { font-size: 12px; padding: 14px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="window">
+    <div class="topbar">
+      <span class="dot red"></span>
+      <span class="dot yellow"></span>
+      <span class="dot green"></span>
+      <span class="label">resume.js</span>
+    </div>
+<pre><span class="k">const</span> <span class="v">resume</span> = {
+  <span class="p">name</span>: <span class="s">"Sri Krishna Mishra"</span>,
+  <span class="p">contact</span>: {
+    <span class="p">phone</span>: <span class="s">"+91 9905582516"</span>,
+    <span class="p">email</span>: <span class="s">"srikrishnamishra006@gmail.com"</span>,
+    <span class="p">links</span>: [<span class="s">"LinkedIn"</span>, <span class="s">"GitHub"</span>]
+  },
+
+  <span class="c">// summary</span>
+  <span class="p">summary</span>: [
+    <span class="s">"Machine learning intern pursuing B.Tech in Computer Science and Engineering"</span>,
+    <span class="s">"Hands-on experience building end-to-end ML and data pipelines"</span>,
+    <span class="s">"Proficient in Python, C++, TensorFlow, PyTorch, and Docker"</span>,
+    <span class="s">"Integrated LLMs for context-aware systems and real-time AI avatar chatbots"</span>
+  ],
+
+  <span class="p">experience</span>: [
+    {
+      <span class="p">company</span>: <span class="s">"Ceeras IT Services"</span>,
+      <span class="p">role</span>: <span class="s">"Frontend Developer Intern"</span>,
+      <span class="p">period</span>: <span class="s">"Feb 2025 - Jun 2025"</span>,
+      <span class="p">type</span>: <span class="s">"Remote"</span>,
+      <span class="p">highlights</span>: [
+        <span class="s">"» Assisted manufacturing floor UI setup for palette inspection tracking"</span>,
+        <span class="s">"» Coordinated with engineers using MS Office for documentation and planning"</span>
+      ]
+    },
+    {
+      <span class="p">company</span>: <span class="s">"Lms Athena"</span>,
+      <span class="p">role</span>: <span class="s">"AI/ML Intern"</span>,
+      <span class="p">period</span>: <span class="s">"Nov 2025 - Apr 2026"</span>,
+      <span class="p">location</span>: <span class="s">"Roorkee, Uttarakhand"</span>,
+      <span class="p">highlights</span>: [
+        <span class="s">"» Integrated LLM conversational systems with Hugging Face, LangChain, and PyTorch"</span>,
+        <span class="s">"» Built end-to-end API integrations and SQL-powered data pipelines"</span>,
+        <span class="s">"» Developed AI avatar chatbot with STT, TTS, and lip-sync synchronization"</span>,
+        <span class="s">"» Built dockerized MLOps flow: speech -> text -> LLM response -> voice -> avatar"</span>
+      ]
+    }
+  ],
+
+  <span class="p">technicalSkills</span>: {
+    <span class="p">languages</span>: [<span class="s">"Python"</span>, <span class="s">"C++"</span>],
+    <span class="p">frameworksLibraries</span>: [<span class="s">"TensorFlow"</span>, <span class="s">"PyTorch"</span>, <span class="s">"LangChain"</span>, <span class="s">"Flask"</span>, <span class="s">"FastAPI"</span>],
+    <span class="p">aiMlTechniques</span>: [<span class="s">"NLP"</span>, <span class="s">"Machine Learning"</span>, <span class="s">"Deep Learning"</span>, <span class="s">"Fine-tuning"</span>],
+    <span class="p">vectorDatabases</span>: [<span class="s">"ChromaDB"</span>, <span class="s">"Pinecone"</span>],
+    <span class="p">mlopsDevops</span>: [<span class="s">"MLOps Pipelines"</span>, <span class="s">"Docker"</span>],
+    <span class="p">toolsDatabases</span>: [<span class="s">"Git"</span>, <span class="s">"GitHub"</span>, <span class="s">"n8n"</span>, <span class="s">"MySQL"</span>],
+    <span class="p">businessAnalytical</span>: [<span class="s">"MS Office"</span>, <span class="s">"Analytical Skills"</span>]
+  },
+
+  <span class="p">projects</span>: [
+    {
+      <span class="p">name</span>: <span class="s">"Face-verification-authentication"</span>,
+      <span class="p">repo</span>: <span class="s">"Face-verification-authentication"</span>,
+      <span class="p">description</span>: [
+        <span class="s">"Built secure biometric login using Python, Flask, and computer vision"</span>,
+        <span class="s">"Implemented real-time face detection, feature extraction, and identity matching"</span>,
+        <span class="s">"Containerized with Docker and integrated OpenCV + TensorFlow via REST APIs"</span>,
+        <span class="s">"Used model variants like YOLOv8-Face"</span>
+      ]
+    },
+    {
+      <span class="p">name</span>: <span class="s">"AI Chatbot SaaS Platform"</span>,
+      <span class="p">repo</span>: <span class="s">"https://github.com/krishnamishra0i/AI-Chatbot-SaaS"</span>,
+      <span class="p">organization</span>: <span class="s">"LMS Athena"</span>,
+      <span class="p">period</span>: <span class="s">"Nov 2025 - Apr 2026"</span>,
+      <span class="p">location</span>: <span class="s">"Roorkee, Uttarakhand"</span>,
+      <span class="p">description</span>: [
+        <span class="s">"Built multi-tenant AI SaaS platform in Python for chatbot deployment"</span>,
+        <span class="s">"Enabled LLM integration for conversational systems"</span>,
+        <span class="s">"Implemented RAG pipeline with LangChain and embeddings"</span>
+      ]
+    }
+  ],
+
+  <span class="p">education</span>: [
+    { <span class="p">institute</span>: <span class="s">"Quantum University, Roorkee"</span>, <span class="p">period</span>: <span class="s">"Aug 2022 - Jul 2026"</span>, <span class="p">degree</span>: <span class="s">"B.Tech, CSE"</span>, <span class="p">gpa</span>: <span class="n">7.61</span> },
+    { <span class="p">school</span>: <span class="s">"D.A.V Public School, Moonidih, Dhanbad"</span>, <span class="p">period</span>: <span class="s">"Jul 2019 - Jul 2021"</span>, <span class="p">level</span>: <span class="s">"Intermediate, PCM"</span>, <span class="p">score</span>: <span class="s">"79.60%"</span> }
+  ],
+
+  <span class="p">awardsActivities</span>: [
+    <span class="s">"Solved 200+ problems on LeetCode"</span>,
+    <span class="s">"Top 10 Finalist in Growbinar Hackathon"</span>,
+    <span class="s">"Completed Marketing Internship with Shaastra, IIT Madras"</span>,
+    <span class="s">"Wrote 2 research papers in ML: https://independent.academia.edu/SriKrishnaMishra1"</span>
+  ],
+
+  <span class="p">certifications</span>: [
+    <span class="s">"British Airways Data Science Job Simulation Certificate"</span>,
+    <span class="s">"Deloitte Australia Technology Completion Certificate"</span>
+  ]
+};</pre>
+  </div>
+</body>
+</html>

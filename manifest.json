@@ -1,0 +1,51 @@
+{
+  "manifest_version": 3,
+  "name": "Career Ops One UI",
+  "version": "0.1.0",
+  "description": "One step-by-step UI for job queue, ATS-tailored resume, PDF attach, and portal autofill.",
+  "permissions": ["activeTab", "tabs", "scripting", "storage", "sidePanel"],
+  "host_permissions": ["http://127.0.0.1:3030/*", "http://localhost:3030/*", "https://*/*", "http://*/*"],
+  "action": {
+    "default_title": "Career Ops One UI"
+  },
+  "background": {
+    "service_worker": "chrome-extension/service-worker.js",
+    "type": "module"
+  },
+  "side_panel": {
+    "default_path": "chrome-extension/panel.html"
+  },
+  "commands": {
+    "next-role": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+1"
+      },
+      "description": "Open next role in the one-UI flow"
+    },
+    "fill-basic": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+2"
+      },
+      "description": "Fill basic fields on the active portal"
+    },
+    "attach-pdf": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+3"
+      },
+      "description": "Attach the tailored PDF to the active portal"
+    },
+    "mark-submitted": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+4"
+      },
+      "description": "Log the current application as submitted"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["chrome-extension/content-script.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

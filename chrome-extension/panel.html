@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Career Ops One UI</title>
+  <link rel="stylesheet" href="panel.css" />
+</head>
+<body>
+  <main class="shell">
+    <section class="hero">
+      <div>
+        <p class="eyebrow">Career Ops</p>
+        <h1>One UI for job applications</h1>
+        <p class="subtitle">Prepare the queue, open one role at a time, log in manually, then let the extension fill and attach the tailored PDF.</p>
+      </div>
+      <div class="controls">
+        <input id="jobLinkInput" type="url" placeholder="Paste job URL (or leave empty to use active tab URL)" />
+        <input id="jobCategoryInput" type="text" value="ai/ml" placeholder="Category (optional)" />
+        <input id="jobSkillsInput" type="text" placeholder="Skills comma-separated (optional)" />
+        <label for="resumeTrackSelect">Resume</label>
+        <select id="resumeTrackSelect">
+          <option value="">Auto</option>
+          <option value="cv-internship.md">Internship</option>
+          <option value="cv-fulltime.md">Full-time</option>
+          <option value="cv.md">Base CV</option>
+        </select>
+        <button id="applyLinkBtn" class="primary">Apply from link</button>
+        <button id="refreshBtn" class="ghost">Refresh queue</button>
+        <button id="searchBtn" class="ghost">Refresh + search</button>
+      </div>
+    </section>
+
+    <section class="stats grid" id="stats"></section>
+
+    <section class="panel steps">
+      <div class="panel-header">
+        <h2>Step-by-step flow</h2>
+        <div class="controls">
+          <label>
+            Threshold
+            <input id="thresholdInput" type="number" min="0" max="100" step="1" value="55" />
+          </label>
+          <button id="prepareBtn" class="primary">Prepare queue</button>
+        </div>
+      </div>
+      <ol class="step-list">
+        <li>Open the next role.</li>
+        <li>Log in manually on the portal.</li>
+        <li>Fill basic fields and copy any remaining answers.</li>
+        <li>Attach the tailored PDF.</li>
+        <li>Submit the application.</li>
+        <li>Mark it submitted and move to the next one.</li>
+      </ol>
+    </section>
+
+    <section class="panel current">
+      <div class="panel-header">
+        <h2>Current role</h2>
+        <div class="controls">
+          <button id="openBtn" class="secondary">Open role</button>
+          <button id="autoBtn" class="secondary">Auto after login</button>
+          <button id="fillBtn" class="secondary">Fill basic</button>
+          <button id="attachBtn" class="secondary">Attach PDF</button>
+          <button id="updateResumeBtn" class="secondary">Update resume + upload</button>
+          <button id="applyNextBtn" class="primary">Apply next</button>
+          <button id="editResumeBtn" class="ghost">Edit resume</button>
+          <button id="openPackBtn" class="ghost">Open pack</button>
+          <button id="markBtn" class="primary">Mark submitted</button>
+        </div>
+      </div>
+      <div id="currentCard" class="current-card empty">Loading current queue item...</div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header">
+        <h2>Applications ATS dashboard</h2>
+        <div class="controls">
+          <input id="appFilterInput" type="search" placeholder="Filter company or role" />
+          <button id="reloadAppsBtn" class="ghost">Reload list</button>
+        </div>
+      </div>
+      <div id="appsList" class="apps-list"></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header">
+        <h2>Queue</h2>
+        <button id="nextBtn" class="ghost">Next role</button>
+      </div>
+      <div id="queueList" class="queue-list"></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header">
+        <h2>Exact answers</h2>
+        <button id="copyBtn" class="ghost">Copy answer block</button>
+      </div>
+      <pre id="answersBox" class="answers empty">Open a role to load the fill-in answers.</pre>
+    </section>
+  </main>
+
+  <script src="panel.js"></script>
+</body>
+</html>
