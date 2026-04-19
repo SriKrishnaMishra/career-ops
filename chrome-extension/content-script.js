@@ -1,4 +1,5 @@
-const HELPERS = ['http://127.0.0.1:3030', 'http://localhost:3030'];
+var HELPERS = globalThis.__CAREER_OPS_HELPERS__ || ['http://127.0.0.1:3030', 'http://localhost:3030'];
+globalThis.__CAREER_OPS_HELPERS__ = HELPERS;
 
 async function helperFetch(path, options = {}) {
   let lastError = null;
@@ -34,6 +35,22 @@ function isUsableField(field) {
   const type = (field.type || '').toLowerCase();
   if (type === 'hidden') return false;
   return true;
+}
+
+function isRequiredField(field) {
+  if (!field) return false;
+  const requiredAttr = field.required || field.getAttribute('aria-required') === 'true' || field.getAttribute('required') !== null;
+  const hints = fieldHints(field);
+  return requiredAttr || /\*\s*$|required/.test(hints);
+}
+
+function isFilledField(field) {
+  if (!field) return false;
+  const type = (field.type || '').toLowerCase();
+  if (type === 'radio') return Boolean(field.checked);
+  if (type === 'checkbox') return Boolean(field.checked);
+  if (field.tagName === 'SELECT') return Boolean(String(field.value || '').trim());
+  return Boolean(String(field.value || '').trim());
 }
 
 function setNativeValue(el, value) {
@@ -77,11 +94,13 @@ function matchFieldKey(text) {
   if (/(proud of|most proud|achievement|project you are proud)/.test(t)) return 'what work of yours are you most proud of?';
   if (/(location|country|where do you live|based in)/.test(t)) return 'location';
   if (/(authorization to work|authori[sz]ation to work|authorized to work|work authorization)/.test(t)) return 'work authorization';
+  if (/(applied ai engineer|aaie|forward deployed)/.test(t)) return 'applied ai track';
   if (/(what languages are you fluent in|languages are you fluent)/.test(t)) return 'what languages are you fluent in?';
   if (/(most complex llm project|complex llm project|few llm experiment|ai project)/.test(t)) return 'what is your most complex llm project?';
   if (/(optimize for in life)/.test(t)) return 'what do you optimize for in life?';
   if (/(how intensely do you like working|intensely do you like working)/.test(t)) return 'how intensely do you like working?';
   if (/(what should we know about you)/.test(t)) return 'what should we know about you?';
+  if (/(what gender do you identify as|gender do you identify as|gender identity)/.test(t)) return 'gender identity';
   return '';
 }
 
@@ -144,39 +163,207 @@ function compactAnswer(text, maxChars = 650) {
   return `${cleaned.slice(0, maxChars - 1).trim()}…`;
 }
 
+function isLowSignalLongFormAnswer(value) {
+  const t = normalizeKey(value);
+  if (!t) return true;
+  if (t.length < 40) return true;
+
+  const genericMarkers = [
+    /practical production ready ai systems/,
+    /measurable user impact/,
+    /reliability and continuous improvement/,
+    /owning ambiguous problems end to end/,
+    /shipping with high quality/
+  ];
+  let markerHits = 0;
+  for (const marker of genericMarkers) {
+    if (marker.test(t)) markerHits += 1;
+  }
+  return markerHits >= 2;
+}
+
+function specializedLongFormAnswer(key, profile, answers) {
+  const normalizedKey = normalizeKey(key);
+  const targetRole = String(profile?.targetRole || profile?.headline || 'AI engineer').trim();
+  const baseProject = answers?.['what work of yours are you most proud of?'] || '';
+
+  if (normalizedKey === 'what is your most complex llm project') {
+    const projectPrefix = baseProject ? `${baseProject} ` : '';
+    return compactAnswer(`${projectPrefix}My most complex LLM project was a production workflow with retrieval, prompt orchestration, and evaluation checks to generate tailored outputs at scale.`);
+  }
+
+  if (normalizedKey === 'what do you optimize for in life') {
+    return compactAnswer('I optimize for long-term learning, useful work, and consistency. I prefer building things that create measurable impact and keep improving over time.');
+  }
+
+  if (normalizedKey === 'how intensely do you like working') {
+    return compactAnswer('I like working with high intensity in focused blocks. I move fast, keep quality high, and communicate clearly so delivery stays consistent.');
+  }
+
+  if (normalizedKey === 'what should we know about you') {
+    return compactAnswer(`I am strongest at owning ambiguous problems end-to-end and turning ideas into reliable ${targetRole} systems. I bring high ownership, product thinking, and clear communication.`);
+  }
+
+  return '';
+}
+
+function inferQuestionIntent(normalizedQuestion) {
+  const q = normalizeKey(normalizedQuestion);
+  if (/challenge|difficult|complex|problem|debug|incident|failure/.test(q)) return 'challenge';
+  if (/team|collaborat|stakeholder|communicat|cross functional/.test(q)) return 'collaboration';
+  if (/why|motivat|interest|excite|join/.test(q)) return 'motivation';
+  if (/proud|project|achievement|portfolio|built|build/.test(q)) return 'project';
+  if (/optimi[sz]e|goal|priorit|life/.test(q)) return 'optimization';
+  if (/intens|work style|pace|pressure/.test(q)) return 'intensity';
+  if (/language|fluent|speak/.test(q)) return 'languages';
+  return 'generic';
+}
+
+function questionTopicSnippet(questionText) {
+  const tokens = tokenizeNormalized(questionText).filter((t) => !['what', 'your', 'you', 'about', 'with', 'this', 'that'].includes(t));
+  return tokens.slice(0, 4).join(', ');
+}
+
 function composeUnknownQuestionAnswer(questionText, profile, answers, answerEntries) {
   const q = String(questionText || '').trim();
   if (!q) return '';
 
   const bestKnown = findAnswerByQuestionText(q, answerEntries);
-  if (bestKnown) return compactAnswer(bestKnown);
+  const normalizedQuestion = normalizeKey(q);
+  const mappedKey = matchFieldKey(normalizedQuestion) || normalizedQuestion;
+  const specialized = specializedLongFormAnswer(mappedKey, profile, answers);
+  if (bestKnown && !(specialized && isLowSignalLongFormAnswer(bestKnown))) return compactAnswer(bestKnown);
+  if (specialized) return specialized;
 
   const name = String(profile?.name || '').trim() || 'I';
   const roleContext = String(profile?.targetRole || profile?.headline || '').trim();
   const proudWork = answers?.['what work of yours are you most proud of?'] || '';
   const motivation = answers?.['what excites you about this role?'] || '';
 
-  const normalized = normalizeKey(q);
-  if (/challenge|difficult|complex|problem|debug|incident|failure/.test(normalized)) {
+  const normalized = normalizedQuestion;
+  const intent = inferQuestionIntent(normalized);
+  const topic = questionTopicSnippet(q);
+
+  if (intent === 'challenge') {
     return compactAnswer(`${name} approach complex problems by breaking them into measurable milestones, validating assumptions quickly, and iterating with feedback loops until quality and reliability targets are met.`);
   }
-  if (/team|collaborat|stakeholder|communicat|cross functional/.test(normalized)) {
+  if (intent === 'collaboration') {
     return compactAnswer(`${name} work best in collaborative teams with clear ownership, fast communication, and shared quality standards. I proactively document decisions and align execution with product outcomes.`);
   }
-  if (/why|motivat|interest|excite|join/.test(normalized) && motivation) {
+  if (intent === 'motivation' && motivation) {
     return compactAnswer(motivation);
   }
-  if (/proud|project|achievement|portfolio|built|build/.test(normalized) && proudWork) {
+  if (intent === 'project' && proudWork) {
     return compactAnswer(proudWork);
+  }
+
+  if (intent === 'optimization') {
+    return compactAnswer('I optimize for long-term learning, useful output, and consistent execution. I prefer goals that improve user value while increasing reliability and delivery quality over time.');
+  }
+  if (intent === 'intensity') {
+    return compactAnswer('I like focused, high-intensity work in clear execution windows, with strong ownership and sustainable pace. I aim for consistent quality and fast iteration.');
+  }
+  if (intent === 'languages') {
+    return compactAnswer(profile?.languages || answers?.['what languages are you fluent in?'] || 'English, Hindi');
   }
 
   const generic = [
     roleContext ? `I am focused on ${roleContext}.` : 'I focus on building practical, production-ready AI systems.',
+    topic ? `For this question (${topic}), I emphasize clear business impact and technical reliability.` : 'I align technical decisions with measurable outcomes.',
     'I optimize for measurable user impact, reliability, and continuous improvement.',
     'I am comfortable owning ambiguous problems end-to-end and shipping with high quality.'
   ].join(' ');
 
   return compactAnswer(generic);
+}
+
+function fillRequiredFieldFallback(fields, profile, answers, answerEntries, stats) {
+  let filled = 0;
+
+  const handledRadioNames = new Set();
+  for (const field of fields) {
+    if (!isUsableField(field) || !isRequiredField(field)) continue;
+    if (isFilledField(field)) continue;
+
+    const type = (field.type || '').toLowerCase();
+    const label = labelTextFor(field);
+    const key = matchFieldKey(label) || classifyField(field);
+
+    if (type === 'radio') {
+      const groupName = field.name || `${field.id || ''}-${normalizeKey(label)}`;
+      if (!groupName || handledRadioNames.has(groupName)) continue;
+      handledRadioNames.add(groupName);
+
+      const group = radioGroupForField(fields, field, label);
+      const desired = normalizeKey(
+        resolveValue(key, answers, profile)
+        || fallbackAnswerForQuestion(label, profile, answers)
+        || (/(gender|demographic|diversity)/.test(normalizeKey(label)) ? 'prefer not to respond' : 'yes')
+      );
+
+      let picked = false;
+      for (const option of group) {
+        const optionText = normalizeKey(optionTextFor(option));
+        const shouldPick = optionText.includes(desired)
+          || (desired === 'yes' && /\byes\b/.test(optionText))
+          || (desired === 'no' && /\bno\b/.test(optionText))
+          || (desired === 'prefer not to respond' && /prefer not/.test(optionText));
+        if (shouldPick) {
+          option.checked = true;
+          option.dispatchEvent(new Event('change', { bubbles: true }));
+          picked = true;
+          filled += 1;
+          if (stats?.filledKeys) stats.filledKeys.add(key || 'required-radio');
+          break;
+        }
+      }
+      if (!picked && group[0]) {
+        group[0].checked = true;
+        group[0].dispatchEvent(new Event('change', { bubbles: true }));
+        filled += 1;
+        if (stats?.filledKeys) stats.filledKeys.add(key || 'required-radio');
+      }
+      continue;
+    }
+
+    if (type === 'checkbox') {
+      field.checked = true;
+      field.dispatchEvent(new Event('change', { bubbles: true }));
+      filled += 1;
+      if (stats?.filledKeys) stats.filledKeys.add(key || 'required-checkbox');
+      continue;
+    }
+
+    if (field.tagName === 'SELECT') {
+      const preferred = sanitizeResolvedValue(key, resolveValue(key, answers, profile) || fallbackAnswerForQuestion(label, profile, answers));
+      const selected = preferred ? setOptionByText(field, preferred) : false;
+      if (!selected) {
+        const options = Array.from(field.options || []).filter((opt) => String(opt.value || '').trim());
+        if (options[0]) {
+          field.value = options[0].value;
+          field.dispatchEvent(new Event('change', { bubbles: true }));
+          filled += 1;
+          if (stats?.filledKeys) stats.filledKeys.add(key || 'required-select');
+        }
+      } else {
+        filled += 1;
+        if (stats?.filledKeys) stats.filledKeys.add(key || 'required-select');
+      }
+      continue;
+    }
+
+    let value = sanitizeResolvedValue(key, resolveValue(key, answers, profile));
+    if (!value) value = findAnswerByQuestionText(label, answerEntries);
+    if (!value) value = fallbackAnswerForQuestion(label, profile, answers);
+    if (!value) value = composeUnknownQuestionAnswer(label, profile, answers, answerEntries);
+    if (value) {
+      setNativeValue(field, value);
+      filled += 1;
+      if (stats?.filledKeys) stats.filledKeys.add(key || 'required-text');
+    }
+  }
+
+  return filled;
 }
 
 function resolveValue(key, answers, profile) {
@@ -202,7 +389,10 @@ function resolveValue(key, answers, profile) {
     const normalizedAnswerKey = normalizeKey(k);
     return normalizedAnswerKey === normalizedKey || normalizedAnswerKey.includes(normalizedKey) || normalizedKey.includes(normalizedAnswerKey);
   })?.[1];
-  return directAnswer || fuzzyAnswer || profile?.[normalizedKey] || profile?.[profileKey] || '';
+  const resolved = directAnswer || fuzzyAnswer || profile?.[normalizedKey] || profile?.[profileKey] || '';
+  const specialized = specializedLongFormAnswer(normalizedKey, profile, answers);
+  if (specialized && isLowSignalLongFormAnswer(resolved)) return specialized;
+  return resolved;
 }
 
 function sanitizeResolvedValue(key, value) {
@@ -218,13 +408,41 @@ function sanitizeResolvedValue(key, value) {
 }
 
 function optionTextFor(field) {
+  const labels = field.labels && field.labels.length
+    ? Array.from(field.labels).map((node) => node.textContent || '').join(' ')
+    : '';
+  const siblingText = [
+    field.previousSibling?.textContent || '',
+    field.nextSibling?.textContent || ''
+  ].join(' ');
+
   return [
     field.value,
     field.getAttribute('value'),
     field.getAttribute('aria-label'),
+    labels,
     field.closest('label')?.textContent || '',
-    field.parentElement?.textContent || ''
+    siblingText
   ].filter(Boolean).join(' ').toLowerCase();
+}
+
+function radioGroupForField(fields, field, label) {
+  if (field.name) {
+    const byName = fields.filter((candidate) => (candidate.type || '').toLowerCase() === 'radio' && candidate.name === field.name);
+    if (byName.length) return byName;
+  }
+
+  const normalizedLabel = normalizeKey(label);
+  if (!normalizedLabel) return [field];
+
+  const byLabel = fields.filter((candidate) => {
+    if ((candidate.type || '').toLowerCase() !== 'radio') return false;
+    const candidateLabel = normalizeKey(labelTextFor(candidate));
+    if (!candidateLabel) return false;
+    return candidateLabel.includes(normalizedLabel) || normalizedLabel.includes(candidateLabel);
+  });
+
+  return byLabel.length ? byLabel : [field];
 }
 
 function fallbackAnswerForQuestion(label, profile, answers) {
@@ -234,25 +452,38 @@ function fallbackAnswerForQuestion(label, profile, answers) {
   if (/(authorization to work|authori[sz]ation to work|authorized to work|work authorization)/.test(t)) {
     return answers?.['work authorization'] || 'Yes';
   }
+  if (/(applied ai engineer|aaie|forward deployed)/.test(t)) {
+    return answers?.['applied ai track'] || profile?.appliedAiTrack || 'AAIE | Forward Deployed';
+  }
   if (/(what languages are you fluent in|languages are you fluent)/.test(t)) {
     return answers?.['what languages are you fluent in?'] || profile?.languages || 'English, Hindi';
   }
   if (/(most complex llm project|complex llm project|few llm experiment|ai project)/.test(t)) {
-    return answers?.['what is your most complex llm project?']
-      || answers?.['what work of yours are you most proud of?']
+    const direct = answers?.['what is your most complex llm project?'] || answers?.['what work of yours are you most proud of?'] || '';
+    if (direct && !isLowSignalLongFormAnswer(direct)) return direct;
+    return specializedLongFormAnswer('what is your most complex llm project?', profile, answers)
       || 'I build production-focused AI systems end-to-end: data pipeline, retrieval, prompting, evaluation, and deployment. I focus on reliability, latency, and measurable user impact.';
   }
   if (/(optimize for in life)/.test(t)) {
-    return answers?.['what do you optimize for in life?']
+    const direct = answers?.['what do you optimize for in life?'] || '';
+    if (direct && !isLowSignalLongFormAnswer(direct)) return direct;
+    return specializedLongFormAnswer('what do you optimize for in life?', profile, answers)
       || 'I optimize for long-term learning, useful output, and consistent execution with high ownership.';
   }
   if (/(how intensely do you like working|intensely do you like working)/.test(t)) {
-    return answers?.['how intensely do you like working?']
+    const direct = answers?.['how intensely do you like working?'] || '';
+    if (direct && !isLowSignalLongFormAnswer(direct)) return direct;
+    return specializedLongFormAnswer('how intensely do you like working?', profile, answers)
       || 'I enjoy working with high intensity in focused blocks while keeping quality and consistency high.';
   }
   if (/(what should we know about you)/.test(t)) {
-    return answers?.['what should we know about you?']
+    const direct = answers?.['what should we know about you?'] || '';
+    if (direct && !isLowSignalLongFormAnswer(direct)) return direct;
+    return specializedLongFormAnswer('what should we know about you?', profile, answers)
       || 'I learn quickly, communicate clearly, and like shipping practical AI systems that solve real user problems.';
+  }
+  if (/(what gender do you identify as|gender do you identify as|gender identity)/.test(t)) {
+    return answers?.['gender identity'] || profile?.genderIdentity || 'Prefer not to respond';
   }
 
   return '';
@@ -469,11 +700,13 @@ function classifyField(field) {
   if (/(years of experience|experience years|years? experience|total experience)/.test(text)) return 'years of experience';
   if (/(location|country|where do you live|based in|city|state)/.test(text)) return 'location';
   if (/(authorization to work|authori[sz]ation to work|authorized to work|work authorization)/.test(text)) return 'work authorization';
+  if (/(applied ai engineer|aaie|forward deployed)/.test(text)) return 'applied ai track';
   if (/(what languages are you fluent in|languages are you fluent)/.test(text)) return 'what languages are you fluent in?';
   if (/(most complex llm project|complex llm project|few llm experiment|ai project)/.test(text)) return 'what is your most complex llm project?';
   if (/(optimize for in life)/.test(text)) return 'what do you optimize for in life?';
   if (/(how intensely do you like working|intensely do you like working)/.test(text)) return 'how intensely do you like working?';
   if (/(what should we know about you)/.test(text)) return 'what should we know about you?';
+  if (/(what gender do you identify as|gender do you identify as|gender identity)/.test(text)) return 'gender identity';
   if (/(salary|compensation|pay|expected salary|notice period|start date|availability)/.test(text)) return 'form-fallback';
   return '';
 }
@@ -563,7 +796,18 @@ function fillWithAnswers(answers, profile, stats) {
       continue;
     }
 
-    if (!key) continue;
+    if (!key) {
+      // Out-of-box fallback: still answer unlabeled text prompts.
+      if (field.tagName === 'TEXTAREA' || lowerType === 'text') {
+        const unknownValue = composeUnknownQuestionAnswer(label, profile, answers, answerEntries);
+        if (unknownValue) {
+          setNativeValue(field, unknownValue);
+          count += 1;
+          if (stats?.filledKeys) stats.filledKeys.add('dynamic-question');
+        }
+      }
+      continue;
+    }
 
     if (field.tagName === 'SELECT') {
       const value = sanitizeResolvedValue(key, resolveValue(key, answers, profile));
@@ -596,6 +840,9 @@ function fillWithAnswers(answers, profile, stats) {
   if (count === 0) {
     count += fillOrderedFallback(profile, stats, count);
   }
+
+  // Advanced pass: fill required unanswered prompts (including custom questions).
+  count += fillRequiredFieldFallback(fields, profile, answers, answerEntries, stats);
 
   return count;
 }
@@ -651,15 +898,10 @@ function findResumeFileInput() {
 }
 
 function triggerFileInputOpen(input) {
-  const clickTargets = [
-    input,
-    input.closest('label'),
-    input.closest('[role="button"]'),
-    input.closest('button')
-  ].filter(Boolean);
-  for (const target of clickTargets) {
-    target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-  }
+  // Intentionally left as a no-op.
+  // Browser blocks programmatic file chooser dialogs without user activation,
+  // and we attach files via DataTransfer instead.
+  void input;
 }
 
 async function fetchPack(item) {
@@ -696,27 +938,41 @@ function fillBasicFields(item, pack) {
     'years of experience': profile.years || '0-2',
     location: profile.location || 'India',
     'work authorization': profile.workAuthorization || 'Yes',
+    'applied ai track': profile.appliedAiTrack || 'AAIE | Forward Deployed',
     'what languages are you fluent in?': profile.languages || 'English, Hindi',
-    'what do you optimize for in life?': profile.lifeOptimization || 'Long-term learning, useful work, and consistent delivery.',
-    'how intensely do you like working?': profile.workIntensity || 'I like focused, high-intensity work with strong quality and ownership.',
-    'what should we know about you?': profile.about || 'I enjoy shipping practical AI systems and improving them through feedback loops.'
+    'what is your most complex llm project?': profile.complexLlmProject || 'My most complex LLM project was a production workflow with retrieval, prompt orchestration, and evaluation checks to generate tailored outputs at scale.',
+    'what do you optimize for in life?': profile.lifeOptimization || 'I optimize for long-term learning, useful work, and consistent high-quality execution.',
+    'how intensely do you like working?': profile.workIntensity || 'I like high-intensity, focused work with clear goals, fast iteration, and strong quality.',
+    'what should we know about you?': profile.about || 'I take ownership end-to-end and enjoy building practical AI systems that create real user impact.',
+    'gender identity': profile.genderIdentity || 'Prefer not to respond'
   };
   const stats = { filledKeys: new Set() };
   const filled = fillWithAnswers(answers, explicit, stats);
-  return { filled, filledKeys: Array.from(stats.filledKeys) };
+  const requiredMissing = visibleFields().filter((field) => isRequiredField(field) && !isFilledField(field)).length;
+  return { filled, filledKeys: Array.from(stats.filledKeys), requiredMissing };
 }
 
 async function fillBasicWithRetry(item, pack, retries = 2) {
   let result = fillBasicFields(item, pack);
   const keys = new Set(result.filledKeys || []);
-  for (let i = 0; i < retries && result.filled === 0; i += 1) {
+  let bestMissing = Number.isFinite(Number(result.requiredMissing)) ? Number(result.requiredMissing) : 999;
+  for (let i = 0; i < retries; i += 1) {
     await sleep(900);
-    result = fillBasicFields(item, pack);
-    for (const key of result.filledKeys || []) keys.add(key);
+    const next = fillBasicFields(item, pack);
+    for (const key of next.filledKeys || []) keys.add(key);
+
+    const nextMissing = Number.isFinite(Number(next.requiredMissing)) ? Number(next.requiredMissing) : bestMissing;
+    const improved = next.filled > result.filled || nextMissing < bestMissing;
+    result = next;
+    bestMissing = Math.min(bestMissing, nextMissing);
+
+    if (!improved && i > 0) break;
+    if (bestMissing === 0) break;
   }
   return {
     filled: result.filled,
-    filledKeys: Array.from(keys)
+    filledKeys: Array.from(keys),
+    requiredMissing: bestMissing
   };
 }
 
@@ -730,6 +986,7 @@ async function attachPdf(item) {
   const file = new File([blob], pdfPath.split('/').pop(), { type: 'application/pdf' });
 
   let input = findResumeFileInput();
+  const navigateTo = getApplicationPageUrl();
   if (!input) {
     const opened = clickApplyTrigger();
     if (opened) {
@@ -737,9 +994,19 @@ async function attachPdf(item) {
       input = findResumeFileInput();
     }
   }
-  if (!input) throw new Error('No file input found on this page. Open the actual application form first.');
 
-  triggerFileInputOpen(input);
+  for (let i = 0; i < 3 && !input; i += 1) {
+    await sleep(700);
+    input = findResumeFileInput();
+  }
+
+  if (!input) {
+    return {
+      ok: false,
+      navigateTo,
+      error: 'No file input found on this page. Open the actual application form first.'
+    };
+  }
 
   const dataTransfer = new DataTransfer();
   dataTransfer.items.add(file);
@@ -747,7 +1014,7 @@ async function attachPdf(item) {
   input.dispatchEvent(new Event('input', { bubbles: true }));
   input.dispatchEvent(new Event('change', { bubbles: true }));
   await sleep(400);
-  return true;
+  return { ok: true };
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -759,7 +1026,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       let fillResult = await fillBasicWithRetry(item, pack);
       let openedApplication = false;
       let navigateTo = '';
-      if (fillResult.filled === 0) {
+      if (fillResult.filled === 0 || Number(fillResult.requiredMissing) > 0) {
         navigateTo = getApplicationPageUrl();
         openedApplication = Boolean(navigateTo) || clickApplyTrigger();
         if (openedApplication && navigateTo) {
@@ -774,6 +1041,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         ok: true,
         filled: fillResult.filled,
         filledKeys: fillResult.filledKeys || [],
+        requiredMissing: fillResult.requiredMissing,
         packPath: item.packPath,
         openedApplication,
         navigateTo
@@ -784,7 +1052,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const item = message.item || (await helperJson('/api/current')).item;
       if (!item) return sendResponse({ ok: false, error: 'No queued role found' });
       const before = snapshotFieldState();
-      await attachPdf(item);
+      const upload = await attachPdf(item);
+      if (!upload?.ok) {
+        return sendResponse({ ok: false, error: upload?.error || 'Unable to attach PDF', navigateTo: upload?.navigateTo || '' });
+      }
       const restored = restoreFieldState(before);
       return sendResponse({ ok: true, pdfPath: item.pdfPath, restored });
     }
@@ -797,7 +1068,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       let fillResult = await fillBasicWithRetry(item, pack);
       let openedApplication = false;
       let navigateTo = '';
-      if (fillResult.filled === 0) {
+      if (fillResult.filled === 0 || Number(fillResult.requiredMissing) > 0) {
         navigateTo = getApplicationPageUrl();
         openedApplication = Boolean(navigateTo) || clickApplyTrigger();
         if (openedApplication && navigateTo) {
@@ -808,7 +1079,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           fillResult = await fillBasicWithRetry(item, pack);
         }
       }
-      await attachPdf(item);
+      const upload = await attachPdf(item);
+      if (!upload?.ok) {
+        return sendResponse({
+          ok: false,
+          error: upload?.error || 'Unable to attach PDF',
+          navigateTo: upload?.navigateTo || '',
+          filled: fillResult.filled,
+          filledKeys: fillResult.filledKeys || [],
+          requiredMissing: fillResult.requiredMissing,
+          openedApplication
+        });
+      }
       const restored = restoreFieldState(before);
       const refillResult = await fillBasicWithRetry(item, pack, 1);
       return sendResponse({

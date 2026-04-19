@@ -59,7 +59,38 @@ async function waitForTabComplete(tabId, timeoutMs = 15000) {
 }
 
 async function sendActionWithNavigation(tabId, payload, retry = true) {
-  const response = await chrome.tabs.sendMessage(tabId, payload);
+  const transientMessage = /message channel is closed|back\/forward cache|Receiving end does not exist|The tab was closed/i;
+  let response = null;
+  let lastError = null;
+
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      await waitForTabComplete(tabId, 6000).catch(() => undefined);
+      response = await chrome.tabs.sendMessage(tabId, payload);
+      break;
+    } catch (err) {
+      lastError = err;
+      const raw = String(err?.message || err || '');
+      const isTransient = transientMessage.test(raw) || /Could not establish connection/i.test(raw);
+      if (!isTransient) throw err;
+
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          files: ['content-script.js']
+        });
+      } catch {
+        // Continue retries while tab may still be navigating.
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 250 + attempt * 250));
+    }
+  }
+
+  if (!response) {
+    throw new Error(`Unable to run autofill on this tab right now. ${String(lastError?.message || '').trim()}`.trim());
+  }
+
   if (retry && response?.navigateTo) {
     await chrome.tabs.update(tabId, { url: response.navigateTo, active: true });
     await waitForTabComplete(tabId).catch(() => undefined);
@@ -94,10 +125,12 @@ chrome.commands.onCommand.addListener(async (command) => {
   if (!tab?.id) return;
 
   if (command === 'fill-basic') {
-    await chrome.tabs.sendMessage(tab.id, { type: 'CAREER_OPS_FILL_BASIC' });
+    const item = await getCurrentQueueItem();
+    await sendActionWithNavigation(tab.id, { type: 'CAREER_OPS_FILL_BASIC', item });
   }
   if (command === 'attach-pdf') {
-    await chrome.tabs.sendMessage(tab.id, { type: 'CAREER_OPS_ATTACH_PDF' });
+    const item = await getCurrentQueueItem();
+    await sendActionWithNavigation(tab.id, { type: 'CAREER_OPS_ATTACH_PDF', item });
   }
   if (command === 'mark-submitted') {
     await chrome.runtime.sendMessage({ type: 'CAREER_OPS_MARK_SUBMITTED' });

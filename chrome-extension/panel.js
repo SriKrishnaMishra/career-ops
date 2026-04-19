@@ -422,35 +422,48 @@ async function getBestJobTab() {
   return null;
 }
 
-async function ensureContentScript(tabId) {
-  const filesToTry = ['content-script.js', 'chrome-extension/content-script.js'];
+async function sendActionToTab(tabId, payload) {
+  const transientMessage = /message channel is closed|back\/forward cache|Receiving end does not exist|The tab was closed/i;
   let lastError = null;
-  for (const file of filesToTry) {
+
+  for (let attempt = 0; attempt < 4; attempt += 1) {
     try {
-      await chrome.scripting.executeScript({
-        target: { tabId },
-        files: [file]
-      });
-      return true;
+      await waitForTabComplete(tabId, 6000).catch(() => undefined);
+      return await chrome.tabs.sendMessage(tabId, payload);
     } catch (err) {
       lastError = err;
+      const raw = String(err?.message || err || '');
+      const isTransient = transientMessage.test(raw);
+
+      if (isTransient || /Could not establish connection/i.test(raw)) {
+        try {
+          await chrome.scripting.executeScript({
+            target: { tabId },
+            files: ['content-script.js']
+          });
+        } catch {
+          // keep retrying; tab can still be navigating
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 250 + attempt * 250));
+        continue;
+      }
+
+      break;
     }
   }
-  throw lastError || new Error('Unable to inject content script');
-}
 
-async function sendActionToTab(tabId, payload) {
   try {
-    return await chrome.tabs.sendMessage(tabId, payload);
-  } catch (err) {
-    // Retry once after forcing script injection for edge pages/load timing races.
-    try {
-      await ensureContentScript(tabId);
-      return chrome.tabs.sendMessage(tabId, payload);
-    } catch {
+    const tab = await chrome.tabs.get(tabId);
+    const url = String(tab?.url || '');
+    if (!/^https?:\/\//i.test(url)) {
       throw new Error('Unable to run autofill on this tab. Open the actual job application page (https://...), not chrome:// or extension pages, then try again.');
     }
+  } catch {
+    // ignore lookup failures and use the generic guidance below
   }
+
+  throw new Error(`Unable to run autofill on this tab right now. Please retry Auto/Fill once. ${String(lastError?.message || '').trim()}`.trim());
 }
 
 async function openCurrentRole() {
@@ -497,7 +510,18 @@ async function followNavigateTo(navigateTo) {
 }
 
 async function fillBasic() {
-  let result = await sendToActiveTab('CAREER_OPS_FILL_BASIC');
+  let result;
+  try {
+    result = await sendToActiveTab('CAREER_OPS_FILL_BASIC');
+  } catch (err) {
+    const raw = String(err?.message || err || '');
+    if (/autofill on this tab|right now/i.test(raw) && state.current?.url) {
+      await openCurrentRole();
+      result = await sendToActiveTab('CAREER_OPS_FILL_BASIC');
+    } else {
+      throw err;
+    }
+  }
   if (result?.navigateTo) {
     await followNavigateTo(result.navigateTo);
     result = await sendToActiveTab('CAREER_OPS_FILL_BASIC');
@@ -506,6 +530,9 @@ async function fillBasic() {
     els.currentCard.classList.remove('empty');
     els.currentCard.innerHTML += `<div class="meta">Filled fields: ${result.filled}</div>`;
     els.currentCard.innerHTML += renderFilledKeyLine('Filled keys', result.filledKeys);
+    if (Number.isFinite(Number(result.requiredMissing))) {
+      els.currentCard.innerHTML += `<div class="meta">Required fields still missing: ${formatNum(result.requiredMissing)}</div>`;
+    }
     if (result.filled === 0) {
       const hint = result.openedApplication
         ? 'Application form was opened. Run Auto after login one more time.'
@@ -597,18 +624,36 @@ async function updateCurrentResume() {
   // Real-time flow: open selected role tab first, then upload newly generated PDF.
   try {
     await openCurrentRole();
-    const uploadResult = await sendToActiveTab('CAREER_OPS_ATTACH_PDF');
+    let uploadResult = await sendToActiveTab('CAREER_OPS_ATTACH_PDF');
+    if (uploadResult?.navigateTo) {
+      await followNavigateTo(uploadResult.navigateTo);
+      uploadResult = await sendToActiveTab('CAREER_OPS_ATTACH_PDF');
+    }
     if (uploadResult?.ok) {
       els.currentCard.classList.remove('empty');
       els.currentCard.innerHTML += `<div class="meta">Updated resume generated and uploaded: ${escapeText(uploadResult.pdfPath || state.currentPack?.pdfPath || '')}</div>`;
       if (Number(uploadResult.restored) > 0) {
         els.currentCard.innerHTML += `<div class="meta">Restored ${formatNum(uploadResult.restored)} field(s) after upload.</div>`;
       }
+
+      const refill = await sendToActiveTab('CAREER_OPS_FILL_BASIC');
+      if (refill?.navigateTo) {
+        await followNavigateTo(refill.navigateTo);
+      }
+      const refillDone = refill?.navigateTo ? await sendToActiveTab('CAREER_OPS_FILL_BASIC') : refill;
+      if (typeof refillDone?.filled === 'number') {
+        els.currentCard.innerHTML += `<div class="meta">Post-upload refill completed: ${formatNum(refillDone.filled)} field(s).</div>`;
+        els.currentCard.innerHTML += renderFilledKeyLine('Refill keys', refillDone.filledKeys);
+      }
     }
   } catch (err) {
     // One retry path for portals that render upload widgets after first navigation.
     try {
-      const retry = await sendToActiveTab('CAREER_OPS_ATTACH_PDF');
+      let retry = await sendToActiveTab('CAREER_OPS_ATTACH_PDF');
+      if (retry?.navigateTo) {
+        await followNavigateTo(retry.navigateTo);
+        retry = await sendToActiveTab('CAREER_OPS_ATTACH_PDF');
+      }
       if (retry?.ok) {
         els.currentCard.classList.remove('empty');
         els.currentCard.innerHTML += `<div class="meta">Updated resume generated and uploaded after retry: ${escapeText(retry.pdfPath || state.currentPack?.pdfPath || '')}</div>`;
