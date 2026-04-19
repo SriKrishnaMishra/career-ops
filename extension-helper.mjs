@@ -11,6 +11,15 @@ const __dirname = path.dirname(__filename);
 const ROOT = __dirname;
 const PORT = Number(process.env.CAREER_OPS_EXTENSION_PORT || 3030);
 const DEFAULT_MIN_PRIORITY = Number(process.env.CAREER_OPS_MIN_PRIORITY || 55);
+const REFRESH_COOLDOWN_MS = {
+  queue: Number(process.env.CAREER_OPS_QUEUE_REFRESH_COOLDOWN_MS || 2 * 60 * 1000),
+  search: Number(process.env.CAREER_OPS_SEARCH_REFRESH_COOLDOWN_MS || 15 * 60 * 1000)
+};
+
+const refreshState = {
+  queue: { at: 0, stats: null },
+  search: { at: 0, stats: null }
+};
 
 const SUBMISSIONS_PATH = path.join(ROOT, 'data/submissions.tsv');
 const NEXT_BATCH_PATH = path.join(ROOT, 'data/next-apply-batch.md');
@@ -422,14 +431,35 @@ async function handlePrepare(body, res) {
 async function handleRefresh(body, res) {
   const count = Number.isFinite(Number(body.count)) ? Math.max(1, Number(body.count)) : 10;
   const mode = String(body.mode || 'queue').toLowerCase();
+  const force = String(body.force || '').toLowerCase() === 'true' || body.force === true;
+  const cooldownMs = REFRESH_COOLDOWN_MS[mode] || REFRESH_COOLDOWN_MS.queue;
+  const cache = refreshState[mode] || refreshState.queue;
+  const now = Date.now();
+
+  if (!force && cache.at && (now - cache.at) < cooldownMs) {
+    return json(res, 200, {
+      ok: true,
+      mode,
+      skipped: true,
+      cooldownMs,
+      elapsedMs: now - cache.at,
+      stats: cache.stats || getStats()
+    });
+  }
 
   if (mode === 'search') {
     runSearchRefresh(count);
-    return json(res, 200, { ok: true, mode: 'search', stats: getStats() });
+    const stats = getStats();
+    cache.at = now;
+    cache.stats = stats;
+    return json(res, 200, { ok: true, mode: 'search', stats });
   }
 
   runQueueRefresh(count);
-  return json(res, 200, { ok: true, mode: 'queue', stats: getStats() });
+  const stats = getStats();
+  cache.at = now;
+  cache.stats = stats;
+  return json(res, 200, { ok: true, mode: 'queue', stats });
 }
 
 async function handleRegenerateRole(body, res) {
@@ -539,7 +569,17 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'GET' && url.pathname === '/api/current') {
       const minPriority = Number(url.searchParams.get('minPriority') || DEFAULT_MIN_PRIORITY);
-      return json(res, 200, { ok: true, item: queueState(minPriority)[0] || null });
+      const queueItem = queueState(minPriority)[0] || null;
+      if (queueItem) {
+        return json(res, 200, { ok: true, item: queueItem });
+      }
+
+      // Keep extension actions usable even when next-apply-batch has no matching rows.
+      const pendingApp = applicationsState(minPriority, 1, false)[0]
+        || applicationsState(0, 1, false)[0]
+        || applicationsState(0, 1, true)[0]
+        || null;
+      return json(res, 200, { ok: true, item: pendingApp });
     }
 
     if (req.method === 'GET' && url.pathname === '/api/applications') {

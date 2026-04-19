@@ -1,4 +1,4 @@
-const HELPER = 'http://127.0.0.1:3030';
+const HELPERS = ['http://127.0.0.1:3030', 'http://localhost:3030'];
 
 const state = {
   minPriority: 55,
@@ -72,17 +72,27 @@ function formatNum(value) {
 }
 
 async function api(path, options) {
+  const requestOptions = {
+    cache: 'no-store',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(options?.headers || {})
+    }
+  };
+
   let res;
-  try {
-    res = await fetch(`${HELPER}${path}`, {
-      cache: 'no-store',
-      ...options,
-      headers: {
-        'Content-Type': 'application/json',
-        ...(options?.headers || {})
-      }
-    });
-  } catch (err) {
+  let lastError = null;
+  for (const base of HELPERS) {
+    try {
+      res = await fetch(`${base}${path}`, requestOptions);
+      lastError = null;
+      break;
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  if (!res) {
     throw new Error('Cannot reach helper server at http://127.0.0.1:3030. Run: npm --prefix /media/krishna/Windows/krishna/workplace/job-application-fullfill/career-ops run extension:serve');
   }
 
@@ -92,7 +102,7 @@ async function api(path, options) {
   } catch {
     data = {};
   }
-  if (!res.ok || data.ok === false) throw new Error(data.error || `Request failed (${res.status})`);
+  if (!res.ok || data.ok === false) throw new Error(data.error || lastError?.message || `Request failed (${res.status})`);
   return data;
 }
 
@@ -181,13 +191,14 @@ function startAutoRefresh() {
     if (now - state.lastAutoRefreshAt < 2 * 60 * 1000) return;
     state.lastAutoRefreshAt = now;
     try {
-      await refreshQueue('queue', { background: true, preserveCurrent: true });
+      await refreshState({ preserveCurrent: true });
     } catch (err) {
       console.warn(`${reason} failed`, err);
     }
   };
 
-  tick('initial auto refresh').catch(() => undefined);
+  // Avoid running expensive refresh workflows during panel startup.
+  state.lastAutoRefreshAt = Date.now();
   state.autoRefreshTimer = setInterval(() => {
     tick('scheduled auto refresh').catch(() => undefined);
   }, 10 * 60 * 1000);
@@ -202,7 +213,7 @@ function triggerActiveRefresh(reason = 'active tab refresh') {
       const now = Date.now();
       if (now - state.lastAutoRefreshAt < 60 * 1000) return;
       state.lastAutoRefreshAt = now;
-      await refreshQueue('queue', { background: true, preserveCurrent: true });
+      await refreshState({ preserveCurrent: true });
     } catch (err) {
       console.warn(reason, err);
     } finally {
@@ -475,8 +486,22 @@ async function sendToActiveTab(type) {
   return sendActionToTab(tab.id, { type, item });
 }
 
+async function followNavigateTo(navigateTo) {
+  if (!navigateTo) return false;
+  const tab = await getBestJobTab();
+  if (!tab?.id) return false;
+  await chrome.tabs.update(tab.id, { url: navigateTo, active: true });
+  await waitForTabComplete(tab.id).catch(() => undefined);
+  state.lastJobTabId = tab.id;
+  return true;
+}
+
 async function fillBasic() {
-  const result = await sendToActiveTab('CAREER_OPS_FILL_BASIC');
+  let result = await sendToActiveTab('CAREER_OPS_FILL_BASIC');
+  if (result?.navigateTo) {
+    await followNavigateTo(result.navigateTo);
+    result = await sendToActiveTab('CAREER_OPS_FILL_BASIC');
+  }
   if (result?.filled >= 0) {
     els.currentCard.classList.remove('empty');
     els.currentCard.innerHTML += `<div class="meta">Filled fields: ${result.filled}</div>`;
@@ -491,7 +516,11 @@ async function fillBasic() {
 }
 
 async function attachPdf() {
-  const result = await sendToActiveTab('CAREER_OPS_ATTACH_PDF');
+  let result = await sendToActiveTab('CAREER_OPS_ATTACH_PDF');
+  if (result?.navigateTo) {
+    await followNavigateTo(result.navigateTo);
+    result = await sendToActiveTab('CAREER_OPS_ATTACH_PDF');
+  }
   if (result?.ok) {
     els.currentCard.classList.remove('empty');
     els.currentCard.innerHTML += `<div class="meta">PDF attached: ${escapeText(result.pdfPath || '')}</div>`;
@@ -502,7 +531,11 @@ async function attachPdf() {
 }
 
 async function autoAfterLogin() {
-  const result = await sendToActiveTab('CAREER_OPS_FILL_AND_ATTACH');
+  let result = await sendToActiveTab('CAREER_OPS_FILL_AND_ATTACH');
+  if (result?.navigateTo) {
+    await followNavigateTo(result.navigateTo);
+    result = await sendToActiveTab('CAREER_OPS_FILL_AND_ATTACH');
+  }
   if (result?.ok) {
     els.currentCard.classList.remove('empty');
     els.currentCard.innerHTML += `<div class="meta">Auto run complete. Filled fields: ${formatNum(result.filled)}.</div>`;
@@ -630,12 +663,20 @@ async function prepareQueue() {
 }
 
 async function refreshQueue(mode = 'queue', options = {}) {
-  const modeLabel = mode === 'search' ? 'Refreshing search + queue (this can take longer)...' : 'Refreshing queue and rank data...';
+  const modeLabel = mode === 'search'
+    ? 'Refreshing search + queue (this can take longer)...'
+    : 'Reloading queue from current data...';
   const perform = async () => {
-    await api('/api/refresh', {
-      method: 'POST',
-      body: JSON.stringify({ mode, count: 10 })
-    });
+    if (mode === 'search') {
+      await api('/api/refresh', {
+        method: 'POST',
+        body: JSON.stringify({ mode, count: 10, force: options.force === true })
+      });
+      await refreshState({ preserveCurrent: options.preserveCurrent !== false });
+      return;
+    }
+
+    // Queue mode is intentionally lightweight to keep the side panel responsive.
     await refreshState({ preserveCurrent: options.preserveCurrent !== false });
   };
 
@@ -725,7 +766,7 @@ els.appFilterInput.addEventListener('input', (event) => {
 });
 els.reloadAppsBtn.addEventListener('click', withActionError('Reload applications', refreshState));
 els.refreshBtn.addEventListener('click', withActionError('Refresh queue', () => refreshQueue('queue', { background: true, preserveCurrent: true })));
-els.searchBtn.addEventListener('click', withActionError('Refresh + search', () => refreshQueue('search', { background: true, preserveCurrent: true })));
+els.searchBtn.addEventListener('click', withActionError('Refresh + search', () => refreshQueue('search', { background: true, preserveCurrent: true, force: true })));
 els.prepareBtn.addEventListener('click', withActionError('Prepare queue', prepareQueue));
 els.openBtn.addEventListener('click', withActionError('Open role', openCurrentRole));
 els.autoBtn.addEventListener('click', withActionError('Auto after login', autoAfterLogin));
@@ -776,6 +817,8 @@ function showError(err, action = '') {
 
   if (/Failed to fetch|Cannot reach helper server/i.test(raw)) {
     message = 'Helper server is not running. Start it with: npm --prefix /media/krishna/Windows/krishna/workplace/job-application-fullfill/career-ops run extension:serve';
+  } else if (/\(408\)|Request failed \(408\)|timed out|timeout/i.test(raw)) {
+    message = 'Refresh timed out while running long research jobs. Use Refresh queue for instant reload, and use Refresh + search only when you want a full rescan.';
   } else if (/No suitable job tab found/i.test(raw)) {
     message = 'No job tab found. Click Open role first, then run autofill/upload.';
   } else if (/Unable to run autofill on this tab/i.test(raw)) {
@@ -793,10 +836,9 @@ function showError(err, action = '') {
 
 async function initializePanel() {
   try {
-    await refreshQueue('queue', { background: true, preserveCurrent: true });
-  } catch (err) {
-    showError(err, 'Initial scan and rank');
     await refreshState({ preserveCurrent: true });
+  } catch (err) {
+    showError(err, 'Initial load');
   }
 }
 

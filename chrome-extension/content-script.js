@@ -1,9 +1,31 @@
-const HELPER = 'http://127.0.0.1:3030';
+const HELPERS = ['http://127.0.0.1:3030', 'http://localhost:3030'];
+
+async function helperFetch(path, options = {}) {
+  let lastError = null;
+  for (const base of HELPERS) {
+    try {
+      return await fetch(`${base}${path}`, { cache: 'no-store', ...options });
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw new Error(lastError?.message || 'Cannot reach helper server');
+}
+
+async function helperJson(path, options = {}) {
+  const res = await helperFetch(path, options);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.ok === false) {
+    throw new Error(data.error || `Request failed (${res.status})`);
+  }
+  return data;
+}
 
 function portalName() {
   const host = window.location.hostname.toLowerCase();
   if (host.includes('ashbyhq.com')) return 'ashby';
   if (host.includes('greenhouse.io')) return 'greenhouse';
+  if (host.includes('lever.co') || host.includes('jobs.lever.co')) return 'lever';
   return 'generic';
 }
 
@@ -54,6 +76,12 @@ function matchFieldKey(text) {
   if (/(what excites you|why .*role|why us|motivat)/.test(t)) return 'what excites you about this role?';
   if (/(proud of|most proud|achievement|project you are proud)/.test(t)) return 'what work of yours are you most proud of?';
   if (/(location|country|where do you live|based in)/.test(t)) return 'location';
+  if (/(authorization to work|authori[sz]ation to work|authorized to work|work authorization)/.test(t)) return 'work authorization';
+  if (/(what languages are you fluent in|languages are you fluent)/.test(t)) return 'what languages are you fluent in?';
+  if (/(most complex llm project|complex llm project|few llm experiment|ai project)/.test(t)) return 'what is your most complex llm project?';
+  if (/(optimize for in life)/.test(t)) return 'what do you optimize for in life?';
+  if (/(how intensely do you like working|intensely do you like working)/.test(t)) return 'how intensely do you like working?';
+  if (/(what should we know about you)/.test(t)) return 'what should we know about you?';
   return '';
 }
 
@@ -63,6 +91,24 @@ function buildAnswerEntries(answers) {
     key: normalizeKey(key),
     value: String(value || '').trim()
   })).filter((entry) => entry.value);
+}
+
+function tokenizeNormalized(text) {
+  return normalizeKey(text)
+    .split(' ')
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 3);
+}
+
+function overlapScore(a, b) {
+  const setA = new Set(tokenizeNormalized(a));
+  const setB = new Set(tokenizeNormalized(b));
+  if (!setA.size || !setB.size) return 0;
+  let hits = 0;
+  for (const token of setA) {
+    if (setB.has(token)) hits += 1;
+  }
+  return hits / Math.max(setA.size, setB.size);
 }
 
 function findAnswerByQuestionText(question, answerEntries) {
@@ -77,7 +123,60 @@ function findAnswerByQuestionText(question, answerEntries) {
     .sort((a, b) => b.key.length - a.key.length)[0];
   if (overlap) return overlap.value;
 
+  const semantic = answerEntries
+    .map((entry) => ({
+      entry,
+      score: overlapScore(normalizedQuestion, entry.key)
+    }))
+    .filter((item) => item.score >= 0.25)
+    .sort((a, b) => b.score - a.score)[0];
+  if (semantic) return semantic.entry.value;
+
   return '';
+}
+
+function compactAnswer(text, maxChars = 650) {
+  const cleaned = String(text || '')
+    .replace(/\s+/g, ' ')
+    .replace(/\s+([,.!?;:])/g, '$1')
+    .trim();
+  if (cleaned.length <= maxChars) return cleaned;
+  return `${cleaned.slice(0, maxChars - 1).trim()}…`;
+}
+
+function composeUnknownQuestionAnswer(questionText, profile, answers, answerEntries) {
+  const q = String(questionText || '').trim();
+  if (!q) return '';
+
+  const bestKnown = findAnswerByQuestionText(q, answerEntries);
+  if (bestKnown) return compactAnswer(bestKnown);
+
+  const name = String(profile?.name || '').trim() || 'I';
+  const roleContext = String(profile?.targetRole || profile?.headline || '').trim();
+  const proudWork = answers?.['what work of yours are you most proud of?'] || '';
+  const motivation = answers?.['what excites you about this role?'] || '';
+
+  const normalized = normalizeKey(q);
+  if (/challenge|difficult|complex|problem|debug|incident|failure/.test(normalized)) {
+    return compactAnswer(`${name} approach complex problems by breaking them into measurable milestones, validating assumptions quickly, and iterating with feedback loops until quality and reliability targets are met.`);
+  }
+  if (/team|collaborat|stakeholder|communicat|cross functional/.test(normalized)) {
+    return compactAnswer(`${name} work best in collaborative teams with clear ownership, fast communication, and shared quality standards. I proactively document decisions and align execution with product outcomes.`);
+  }
+  if (/why|motivat|interest|excite|join/.test(normalized) && motivation) {
+    return compactAnswer(motivation);
+  }
+  if (/proud|project|achievement|portfolio|built|build/.test(normalized) && proudWork) {
+    return compactAnswer(proudWork);
+  }
+
+  const generic = [
+    roleContext ? `I am focused on ${roleContext}.` : 'I focus on building practical, production-ready AI systems.',
+    'I optimize for measurable user impact, reliability, and continuous improvement.',
+    'I am comfortable owning ambiguous problems end-to-end and shipping with high quality.'
+  ].join(' ');
+
+  return compactAnswer(generic);
 }
 
 function resolveValue(key, answers, profile) {
@@ -106,8 +205,80 @@ function resolveValue(key, answers, profile) {
   return directAnswer || fuzzyAnswer || profile?.[normalizedKey] || profile?.[profileKey] || '';
 }
 
+function sanitizeResolvedValue(key, value) {
+  const normalizedKey = normalizeKey(key);
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+
+  if ((normalizedKey === 'linkedin profile' || normalizedKey === 'linkedin') && /^linkedin$/i.test(raw)) return '';
+  if (normalizedKey === 'github' && /^github$/i.test(raw)) return '';
+  if ((normalizedKey === 'website' || normalizedKey === 'portfolio') && /^(website|portfolio|personal site)$/i.test(raw)) return '';
+
+  return raw;
+}
+
+function optionTextFor(field) {
+  return [
+    field.value,
+    field.getAttribute('value'),
+    field.getAttribute('aria-label'),
+    field.closest('label')?.textContent || '',
+    field.parentElement?.textContent || ''
+  ].filter(Boolean).join(' ').toLowerCase();
+}
+
+function fallbackAnswerForQuestion(label, profile, answers) {
+  const t = String(label || '').toLowerCase();
+  if (!t) return '';
+
+  if (/(authorization to work|authori[sz]ation to work|authorized to work|work authorization)/.test(t)) {
+    return answers?.['work authorization'] || 'Yes';
+  }
+  if (/(what languages are you fluent in|languages are you fluent)/.test(t)) {
+    return answers?.['what languages are you fluent in?'] || profile?.languages || 'English, Hindi';
+  }
+  if (/(most complex llm project|complex llm project|few llm experiment|ai project)/.test(t)) {
+    return answers?.['what is your most complex llm project?']
+      || answers?.['what work of yours are you most proud of?']
+      || 'I build production-focused AI systems end-to-end: data pipeline, retrieval, prompting, evaluation, and deployment. I focus on reliability, latency, and measurable user impact.';
+  }
+  if (/(optimize for in life)/.test(t)) {
+    return answers?.['what do you optimize for in life?']
+      || 'I optimize for long-term learning, useful output, and consistent execution with high ownership.';
+  }
+  if (/(how intensely do you like working|intensely do you like working)/.test(t)) {
+    return answers?.['how intensely do you like working?']
+      || 'I enjoy working with high intensity in focused blocks while keeping quality and consistency high.';
+  }
+  if (/(what should we know about you)/.test(t)) {
+    return answers?.['what should we know about you?']
+      || 'I learn quickly, communicate clearly, and like shipping practical AI systems that solve real user problems.';
+  }
+
+  return '';
+}
+
 function allFields() {
-  return Array.from(document.querySelectorAll('input, textarea, select'));
+  return queryAllDeep('input, textarea, select');
+}
+
+function queryAllDeep(selector, root = document) {
+  const found = [];
+  const stack = [root];
+
+  while (stack.length) {
+    const current = stack.pop();
+    if (!current?.querySelectorAll) continue;
+
+    found.push(...Array.from(current.querySelectorAll(selector)));
+
+    const descendants = current.querySelectorAll('*');
+    for (const node of descendants) {
+      if (node.shadowRoot) stack.push(node.shadowRoot);
+    }
+  }
+
+  return found;
 }
 
 function sleep(ms) {
@@ -173,8 +344,67 @@ function isVisibleElement(el) {
   return true;
 }
 
+function normalizeUrlCandidate(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (raw.startsWith('mailto:') || raw.startsWith('tel:') || raw.startsWith('javascript:')) return '';
+  if (/^https?:\/\//i.test(raw)) return raw;
+  if (raw.startsWith('//')) return `${window.location.protocol}${raw}`;
+  if (raw.startsWith('/')) return `${window.location.origin}${raw}`;
+  return '';
+}
+
+function sameHostish(url) {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase();
+    return Boolean(host) && !['login', 'www.google.com'].includes(host);
+  } catch {
+    return false;
+  }
+}
+
+function collectApplicationUrlCandidates() {
+  const candidates = [];
+  const portal = portalName();
+  const links = queryAllDeep('a, button, [role="button"], iframe, input[type="submit"], input[type="button"]');
+
+  for (const el of links) {
+    const text = `${el.textContent || ''} ${el.getAttribute('aria-label') || ''} ${el.getAttribute('title') || ''}`.toLowerCase();
+    const href = normalizeUrlCandidate(el.getAttribute('href') || el.getAttribute('data-href') || el.getAttribute('data-url') || el.getAttribute('data-action') || '');
+    const src = normalizeUrlCandidate(el.getAttribute('src') || '');
+    const candidateUrl = href || src;
+    if (!candidateUrl) continue;
+
+    let score = 0;
+    if (el.tagName === 'IFRAME') score += 5;
+    if (/apply now|apply|start application|submit application|continue application|complete application/.test(text)) score += 6;
+    if (/greenhouse|ashby|lever|workday|apply|jobs/.test(candidateUrl)) score += 4;
+    if (portal === 'greenhouse' && /greenhouse/.test(candidateUrl)) score += 4;
+    if (portal === 'ashby' && /ashby/.test(candidateUrl)) score += 4;
+    if (portal === 'generic' && /apply|jobs|career/.test(candidateUrl)) score += 2;
+    if (/login|sign in|share|linkedin/.test(text)) score -= 5;
+    if (/embed|application|job|career|candidate|apply/.test(candidateUrl)) score += 2;
+
+    if (score > 0) {
+      candidates.push({ url: candidateUrl, score });
+    }
+  }
+
+  return candidates
+    .filter((item) => sameHostish(item.url))
+    .sort((a, b) => b.score - a.score)
+    .map((item) => item.url);
+}
+
+function getApplicationPageUrl() {
+  const candidates = collectApplicationUrlCandidates();
+  const target = candidates[0];
+  return target || '';
+}
+
 function clickApplyTrigger() {
-  const candidates = Array.from(document.querySelectorAll('button, a, [role="button"], input[type="submit"], input[type="button"]'));
+  const candidates = queryAllDeep('button, a, [role="button"], input[type="submit"], input[type="button"]');
   const ranked = candidates
     .filter((el) => isVisibleElement(el) && !el.disabled)
     .map((el) => {
@@ -185,7 +415,7 @@ function clickApplyTrigger() {
       if (/\bapply\b|application/.test(text)) score += 4;
       if (/continue|next/.test(text)) score += 2;
       if (/login|sign in|share|linkedin/.test(text)) score -= 5;
-      if (/\/apply|greenhouse|ashbyhq/.test(href)) score += 3;
+      if (/\/apply|greenhouse|ashbyhq|lever/.test(href)) score += 3;
       return { el, score };
     })
     .filter((item) => item.score > 0)
@@ -193,7 +423,11 @@ function clickApplyTrigger() {
 
   const target = ranked[0]?.el;
   if (!target) return false;
-  target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+  if (typeof target.click === 'function') {
+    target.click();
+  } else {
+    target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+  }
   return true;
 }
 
@@ -234,6 +468,12 @@ function classifyField(field) {
   if (/(website|portfolio|personal site|homepage)/.test(text)) return 'website';
   if (/(years of experience|experience years|years? experience|total experience)/.test(text)) return 'years of experience';
   if (/(location|country|where do you live|based in|city|state)/.test(text)) return 'location';
+  if (/(authorization to work|authori[sz]ation to work|authorized to work|work authorization)/.test(text)) return 'work authorization';
+  if (/(what languages are you fluent in|languages are you fluent)/.test(text)) return 'what languages are you fluent in?';
+  if (/(most complex llm project|complex llm project|few llm experiment|ai project)/.test(text)) return 'what is your most complex llm project?';
+  if (/(optimize for in life)/.test(text)) return 'what do you optimize for in life?';
+  if (/(how intensely do you like working|intensely do you like working)/.test(text)) return 'how intensely do you like working?';
+  if (/(what should we know about you)/.test(text)) return 'what should we know about you?';
   if (/(salary|compensation|pay|expected salary|notice period|start date|availability)/.test(text)) return 'form-fallback';
   return '';
 }
@@ -294,10 +534,28 @@ function fillWithAnswers(answers, profile, stats) {
     const key = matchFieldKey(label) || classifyField(field);
     const lowerType = (field.type || '').toLowerCase();
 
-    if (!key) continue;
+    if (lowerType === 'radio') {
+      const inferredKey = key || matchFieldKey(label) || classifyField(field);
+      let desired = resolveValue(inferredKey, answers, profile);
+      if (!desired) desired = fallbackAnswerForQuestion(label, profile, answers);
+      desired = normalizeKey(desired);
+      if (!desired) continue;
 
-    if (lowerType === 'checkbox' || lowerType === 'radio') {
-      const truthy = /yes|agree|accept|consent|authoriz/.test(label) ? false : null;
+      const optionText = normalizeKey(optionTextFor(field));
+      const shouldCheck = optionText.includes(desired)
+        || (desired === 'yes' && /\byes\b/.test(optionText))
+        || (desired === 'no' && /\bno\b/.test(optionText));
+      if (shouldCheck && !field.checked) {
+        field.checked = true;
+        field.dispatchEvent(new Event('change', { bubbles: true }));
+        count += 1;
+        if (stats?.filledKeys && inferredKey) stats.filledKeys.add(inferredKey);
+      }
+      continue;
+    }
+
+    if (lowerType === 'checkbox') {
+      const truthy = /yes|agree|accept|consent|authoriz/.test(label) ? true : null;
       if (truthy !== null) {
         field.checked = truthy;
         field.dispatchEvent(new Event('change', { bubbles: true }));
@@ -305,8 +563,10 @@ function fillWithAnswers(answers, profile, stats) {
       continue;
     }
 
+    if (!key) continue;
+
     if (field.tagName === 'SELECT') {
-      const value = resolveValue(key, answers, profile);
+      const value = sanitizeResolvedValue(key, resolveValue(key, answers, profile));
       if (value && setOptionByText(field, value)) {
         count += 1;
         if (stats?.filledKeys) stats.filledKeys.add(key);
@@ -318,6 +578,13 @@ function fillWithAnswers(answers, profile, stats) {
     if (!value) {
       value = findAnswerByQuestionText(label, answerEntries);
     }
+    if (!value) {
+      value = fallbackAnswerForQuestion(label, profile, answers);
+    }
+    if (!value && (field.tagName === 'TEXTAREA' || lowerType === 'text')) {
+      value = composeUnknownQuestionAnswer(label, profile, answers, answerEntries);
+    }
+    value = sanitizeResolvedValue(key, value);
     if (value) {
       setNativeValue(field, value);
       count += 1;
@@ -335,7 +602,7 @@ function fillWithAnswers(answers, profile, stats) {
 
 function findResumeFileInput() {
   const portal = portalName();
-  const allFileInputs = Array.from(document.querySelectorAll('input[type="file"]')).filter((el) => !el.disabled);
+  const allFileInputs = queryAllDeep('input[type="file"]').filter((el) => !el.disabled);
   if (allFileInputs.length === 0) return null;
 
   const selectorsByPortal = {
@@ -349,6 +616,12 @@ function findResumeFileInput() {
       'input[type="file"][id*="resume" i]',
       'input[type="file"][accept*="pdf" i]'
     ],
+    lever: [
+      'input[type="file"][name*="resume" i]',
+      'input[type="file"][id*="resume" i]',
+      'input[type="file"][accept*="pdf" i]',
+      'input[type="file"][name*="cv" i]'
+    ],
     generic: [
       'input[type="file"][name*="resume" i]',
       'input[type="file"][id*="resume" i]',
@@ -358,7 +631,7 @@ function findResumeFileInput() {
 
   const portalSelectors = selectorsByPortal[portal] || selectorsByPortal.generic;
   for (const selector of portalSelectors) {
-    const found = document.querySelector(selector);
+    const found = queryAllDeep(selector)[0];
     if (found && !found.disabled) return found;
   }
 
@@ -390,9 +663,7 @@ function triggerFileInputOpen(input) {
 }
 
 async function fetchPack(item) {
-  const res = await fetch(`${HELPER}/api/pack?path=${encodeURIComponent(item.packPath)}`, { cache: 'no-store' });
-  if (!res.ok) throw new Error(`Failed to load pack data (${res.status})`);
-  return res.json();
+  return helperJson(`/api/pack?path=${encodeURIComponent(item.packPath)}`);
 }
 
 function fillBasicFields(item, pack) {
@@ -423,7 +694,12 @@ function fillBasicFields(item, pack) {
     github: normalizeProfileUrl(profile.github, 'github'),
     years: profile.years || '0-2',
     'years of experience': profile.years || '0-2',
-    location: profile.location || 'India'
+    location: profile.location || 'India',
+    'work authorization': profile.workAuthorization || 'Yes',
+    'what languages are you fluent in?': profile.languages || 'English, Hindi',
+    'what do you optimize for in life?': profile.lifeOptimization || 'Long-term learning, useful work, and consistent delivery.',
+    'how intensely do you like working?': profile.workIntensity || 'I like focused, high-intensity work with strong quality and ownership.',
+    'what should we know about you?': profile.about || 'I enjoy shipping practical AI systems and improving them through feedback loops.'
   };
   const stats = { filledKeys: new Set() };
   const filled = fillWithAnswers(answers, explicit, stats);
@@ -448,8 +724,7 @@ async function attachPdf(item) {
   const pdfPath = item?.pdfPath;
   if (!pdfPath) throw new Error('PDF path is missing. Click Update resume + ATS first.');
 
-  const pdfUrl = `${HELPER}/api/pdf?path=${encodeURIComponent(pdfPath)}`;
-  const res = await fetch(pdfUrl, { cache: 'no-store' });
+  const res = await helperFetch(`/api/pdf?path=${encodeURIComponent(pdfPath)}`);
   if (!res.ok) throw new Error(`Failed to load PDF (${res.status})`);
   const blob = await res.blob();
   const file = new File([blob], pdfPath.split('/').pop(), { type: 'application/pdf' });
@@ -478,15 +753,20 @@ async function attachPdf(item) {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   (async () => {
     if (message?.type === 'CAREER_OPS_FILL_BASIC') {
-      const item = message.item || (await (await fetch(`${HELPER}/api/current`)).json()).item;
+      const item = message.item || (await helperJson('/api/current')).item;
       if (!item) return sendResponse({ ok: false, error: 'No queued role found' });
       const pack = await fetchPack(item);
       let fillResult = await fillBasicWithRetry(item, pack);
       let openedApplication = false;
+      let navigateTo = '';
       if (fillResult.filled === 0) {
-        openedApplication = clickApplyTrigger();
-        if (openedApplication) {
-          await sleep(1600);
+        navigateTo = getApplicationPageUrl();
+        openedApplication = Boolean(navigateTo) || clickApplyTrigger();
+        if (openedApplication && navigateTo) {
+          await sleep(500);
+        }
+        if (openedApplication && !navigateTo) {
+          await sleep(2200);
           fillResult = await fillBasicWithRetry(item, pack);
         }
       }
@@ -495,12 +775,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         filled: fillResult.filled,
         filledKeys: fillResult.filledKeys || [],
         packPath: item.packPath,
-        openedApplication
+        openedApplication,
+        navigateTo
       });
     }
 
     if (message?.type === 'CAREER_OPS_ATTACH_PDF') {
-      const item = message.item || (await (await fetch(`${HELPER}/api/current`)).json()).item;
+      const item = message.item || (await helperJson('/api/current')).item;
       if (!item) return sendResponse({ ok: false, error: 'No queued role found' });
       const before = snapshotFieldState();
       await attachPdf(item);
@@ -509,16 +790,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     if (message?.type === 'CAREER_OPS_FILL_AND_ATTACH') {
-      const item = message.item || (await (await fetch(`${HELPER}/api/current`)).json()).item;
+      const item = message.item || (await helperJson('/api/current')).item;
       if (!item) return sendResponse({ ok: false, error: 'No queued role found' });
       const pack = await fetchPack(item);
       const before = snapshotFieldState();
       let fillResult = await fillBasicWithRetry(item, pack);
       let openedApplication = false;
+      let navigateTo = '';
       if (fillResult.filled === 0) {
-        openedApplication = clickApplyTrigger();
-        if (openedApplication) {
-          await sleep(1600);
+        navigateTo = getApplicationPageUrl();
+        openedApplication = Boolean(navigateTo) || clickApplyTrigger();
+        if (openedApplication && navigateTo) {
+          await sleep(500);
+        }
+        if (openedApplication && !navigateTo) {
+          await sleep(2200);
           fillResult = await fillBasicWithRetry(item, pack);
         }
       }
@@ -531,6 +817,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         filledKeys: fillResult.filledKeys || [],
         pdfPath: item.pdfPath,
         openedApplication,
+        navigateTo,
         restored,
         refill: refillResult.filled,
         refillKeys: refillResult.filledKeys || []
