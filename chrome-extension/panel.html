@@ -18,6 +18,12 @@
         <input id="jobLinkInput" type="url" placeholder="Paste job URL (or leave empty to use active tab URL)" />
         <input id="jobCategoryInput" type="text" value="ai/ml" placeholder="Category (optional)" />
         <input id="jobSkillsInput" type="text" placeholder="Skills comma-separated (optional)" />
+        <label for="searchQualitySelect">Search quality</label>
+        <select id="searchQualitySelect">
+          <option value="strict">Strict (best match)</option>
+          <option value="balanced" selected>Balanced</option>
+          <option value="broad">Broad (more roles)</option>
+        </select>
         <label for="resumeTrackSelect">Resume</label>
         <select id="resumeTrackSelect">
           <option value="">Auto</option>
@@ -27,7 +33,7 @@
         </select>
         <button id="applyLinkBtn" class="primary">Apply from link</button>
         <button id="refreshBtn" class="ghost">Refresh queue</button>
-        <button id="searchBtn" class="ghost">Refresh + search</button>
+        <button id="searchBtn" class="ghost">Refresh + discover jobs</button>
       </div>
     </section>
 

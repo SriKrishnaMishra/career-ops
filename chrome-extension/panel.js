@@ -15,7 +15,8 @@ const state = {
   autoRefreshStarted: false,
   autoRefreshTimer: null,
   lastAutoRefreshAt: 0,
-  activeRefreshPending: false
+  activeRefreshPending: false,
+  lastActionMessage: ''
 };
 
 const els = {
@@ -25,6 +26,7 @@ const els = {
   jobLinkInput: document.getElementById('jobLinkInput'),
   jobCategoryInput: document.getElementById('jobCategoryInput'),
   jobSkillsInput: document.getElementById('jobSkillsInput'),
+  searchQualitySelect: document.getElementById('searchQualitySelect'),
   resumeTrackSelect: document.getElementById('resumeTrackSelect'),
   applyLinkBtn: document.getElementById('applyLinkBtn'),
   appFilterInput: document.getElementById('appFilterInput'),
@@ -67,6 +69,9 @@ const actionButtons = [
   els.copyBtn
 ].filter(Boolean);
 
+const HELPER_RETRY_DELAY_MS = 400;
+const HELPER_RETRY_ATTEMPTS = 5;
+
 function formatNum(value) {
   return Number.isFinite(Number(value)) ? String(Number(value)) : '0';
 }
@@ -83,13 +88,19 @@ async function api(path, options) {
 
   let res;
   let lastError = null;
-  for (const base of HELPERS) {
-    try {
-      res = await fetch(`${base}${path}`, requestOptions);
-      lastError = null;
-      break;
-    } catch (err) {
-      lastError = err;
+  for (let attempt = 0; attempt < HELPER_RETRY_ATTEMPTS; attempt += 1) {
+    for (const base of HELPERS) {
+      try {
+        res = await fetch(`${base}${path}`, requestOptions);
+        lastError = null;
+        break;
+      } catch (err) {
+        lastError = err;
+      }
+    }
+    if (res) break;
+    if (attempt < HELPER_RETRY_ATTEMPTS - 1) {
+      await new Promise((resolve) => setTimeout(resolve, HELPER_RETRY_DELAY_MS));
     }
   }
   if (!res) {
@@ -119,6 +130,17 @@ function packAnswers(pack) {
   return pack?.formAnswers || pack?.exactAnswers || {};
 }
 
+function buildDiscoveryQuery() {
+  const category = String(els.jobCategoryInput?.value || '').trim();
+  const skills = String(els.jobSkillsInput?.value || '').trim();
+  const parts = [];
+
+  if (category) parts.push(category);
+  if (skills) parts.push(skills);
+
+  return parts.join(' ').replace(/\s+/g, ' ').trim();
+}
+
 function renderFilledKeyLine(label, keys) {
   const list = Array.isArray(keys) ? keys.filter(Boolean) : [];
   if (!list.length) return '';
@@ -127,12 +149,15 @@ function renderFilledKeyLine(label, keys) {
 
 async function refreshState(options = {}) {
   const preserveCurrent = options.preserveCurrent !== false;
+  const showAllQueue = options.showAllQueue === true;
   const previousCurrentPath = preserveCurrent ? state.current?.packPath : null;
   state.minPriority = Number(els.thresholdInput.value || 55);
+  const queueMinPriority = showAllQueue ? 0 : state.minPriority;
+  const currentMinPriority = showAllQueue ? 0 : state.minPriority;
   const [stats, queueRes, currentRes, appsRes] = await Promise.all([
     api(`/api/stats?minPriority=${state.minPriority}`),
-    api(`/api/queue?limit=20&minPriority=${state.minPriority}`),
-    api(`/api/current?minPriority=${state.minPriority}`),
+    api(`/api/queue?limit=20&minPriority=${queueMinPriority}`),
+    api(`/api/current?minPriority=${currentMinPriority}`),
     api('/api/applications?minPriority=0&limit=300&includeSubmitted=true')
   ]);
 
@@ -143,7 +168,7 @@ async function refreshState(options = {}) {
 
   // If threshold hides all roles, fallback to showing all roles so the UI is never blank.
   state.fallbackToAll = false;
-  if (!state.current && state.queue.length === 0 && state.minPriority > 0) {
+  if (state.queue.length === 0 && state.minPriority > 0) {
     const [allQueueRes, allCurrentRes] = await Promise.all([
       api('/api/queue?limit=20&minPriority=0'),
       api('/api/current?minPriority=0')
@@ -262,7 +287,11 @@ function renderStats() {
 function renderCurrent() {
   if (!state.current || !state.currentPack) {
     els.currentCard.classList.add('empty');
-    els.currentCard.textContent = 'No queued role found. Click Prepare queue first.';
+    els.currentCard.innerHTML = `
+      <div class="current-title">No queued role found</div>
+      <div class="meta">Click Prepare queue, or lower Threshold to 45 / 40 and try Refresh + discover jobs.</div>
+      ${state.lastActionMessage ? `<div class="meta">${escapeText(state.lastActionMessage)}</div>` : ''}
+    `;
     els.answersBox.classList.add('empty');
     els.answersBox.textContent = 'No pack selected yet.';
     return;
@@ -286,6 +315,7 @@ function renderCurrent() {
     <div class="meta">${escapeText(state.current.url)}</div>
     <div class="meta">Pack: ${escapeText(state.current.packPath)}</div>
     <div class="meta">PDF: ${escapeText(pack.pdfPath || state.current.pdfPath || '')}</div>
+    ${state.lastActionMessage ? `<div class="meta">${escapeText(state.lastActionMessage)}</div>` : ''}
     ${fallbackMeta}
     <div class="tags">${tags.map((t) => `<span class="tag">${escapeText(t)}</span>`).join('')}</div>
   `;
@@ -713,23 +743,36 @@ async function refreshQueue(mode = 'queue', options = {}) {
     : 'Reloading queue from current data...';
   const perform = async () => {
     if (mode === 'search') {
-      await api('/api/refresh', {
+      const searchTerm = String(options.searchTerm || '').trim();
+      const searchQuality = String(options.searchQuality || 'balanced').trim().toLowerCase();
+      const refreshResult = await api('/api/refresh', {
         method: 'POST',
-        body: JSON.stringify({ mode, count: 10, force: options.force === true })
+        body: JSON.stringify({ mode, count: 10, force: options.force === true, searchTerm, searchQuality })
       });
-      await refreshState({ preserveCurrent: options.preserveCurrent !== false });
+      await refreshState({
+        preserveCurrent: options.preserveCurrent !== false,
+        showAllQueue: options.showAllQueue === true
+      });
+      const strategy = String(refreshResult?.research?.strategy || 'primary');
+      const discovered = Number(refreshResult?.research?.discovered || 0);
+      const quality = String(refreshResult?.research?.quality || searchQuality || 'balanced');
+      const strategyLabel = strategy === 'primary'
+        ? 'strict match'
+        : strategy === 'relaxed-relevance'
+          ? 'relaxed relevance fallback'
+          : strategy === 'broad-fallback'
+            ? 'broad profile fallback'
+            : 'adaptive fallback';
+      state.lastActionMessage = `Discover jobs completed: ${formatNum(discovered)} new role(s), quality: ${quality}, strategy: ${strategyLabel}. If needed, lower Threshold to 45 or 40 and click Refresh queue.`;
       return;
     }
 
     // Queue mode is intentionally lightweight to keep the side panel responsive.
     await refreshState({ preserveCurrent: options.preserveCurrent !== false });
+    state.lastActionMessage = 'Queue refreshed from the latest ranked data.';
   };
 
-  if (options.background) {
-    return perform();
-  }
-
-  await withBusy(modeLabel, perform, { refreshState: false });
+  await withBusy(modeLabel, perform, { refreshState: false, showWorkingCard: true });
 }
 
 async function copyAnswers() {
@@ -750,9 +793,21 @@ function upsertGeneratedApplication(item) {
 async function resolveJobLink() {
   const inputUrl = String(els.jobLinkInput?.value || '').trim();
   if (/^https?:\/\//i.test(inputUrl)) return inputUrl;
-  const tab = await currentTab();
+
+  // Accept links pasted without protocol, e.g. careers.example.com/job/123.
+  if (/^[^\s]+\.[^\s]+\/.+/i.test(inputUrl)) {
+    return `https://${inputUrl.replace(/^\/+/, '')}`;
+  }
+
+  // Prefer selected/queued role URL when side panel is focused.
+  if (/^https?:\/\//i.test(String(state.current?.url || ''))) {
+    return state.current.url;
+  }
+
+  const tab = await getBestJobTab();
   if (isHttpTab(tab)) return tab.url;
-  throw new Error('Enter a valid job link or open the job page in an active browser tab.');
+
+  throw new Error('Enter a valid job link, select a role from the queue, or open the job page in a browser tab.');
 }
 
 function getApplyLinkOptions() {
@@ -810,8 +865,14 @@ els.appFilterInput.addEventListener('input', (event) => {
   renderApplications();
 });
 els.reloadAppsBtn.addEventListener('click', withActionError('Reload applications', refreshState));
-els.refreshBtn.addEventListener('click', withActionError('Refresh queue', () => refreshQueue('queue', { background: true, preserveCurrent: true })));
-els.searchBtn.addEventListener('click', withActionError('Refresh + search', () => refreshQueue('search', { background: true, preserveCurrent: true, force: true })));
+els.refreshBtn.addEventListener('click', withActionError('Refresh queue', () => refreshQueue('queue', { preserveCurrent: true })));
+els.searchBtn.addEventListener('click', withActionError('Refresh + discover jobs', () => refreshQueue('search', {
+  preserveCurrent: false,
+  force: true,
+  showAllQueue: true,
+  searchTerm: buildDiscoveryQuery(),
+  searchQuality: String(els.searchQualitySelect?.value || 'balanced')
+})));
 els.prepareBtn.addEventListener('click', withActionError('Prepare queue', prepareQueue));
 els.openBtn.addEventListener('click', withActionError('Open role', openCurrentRole));
 els.autoBtn.addEventListener('click', withActionError('Auto after login', autoAfterLogin));
@@ -863,7 +924,7 @@ function showError(err, action = '') {
   if (/Failed to fetch|Cannot reach helper server/i.test(raw)) {
     message = 'Helper server is not running. Start it with: npm --prefix /media/krishna/Windows/krishna/workplace/job-application-fullfill/career-ops run extension:serve';
   } else if (/\(408\)|Request failed \(408\)|timed out|timeout/i.test(raw)) {
-    message = 'Refresh timed out while running long research jobs. Use Refresh queue for instant reload, and use Refresh + search only when you want a full rescan.';
+    message = 'Refresh timed out while running the broader discovery pass. Use Refresh queue for instant reload, and use Refresh + discover jobs only when you want a full refresh of new roles.';
   } else if (/No suitable job tab found/i.test(raw)) {
     message = 'No job tab found. Click Open role first, then run autofill/upload.';
   } else if (/Unable to run autofill on this tab/i.test(raw)) {

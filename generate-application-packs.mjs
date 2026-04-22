@@ -99,12 +99,55 @@ function buildRoleBullets(role) {
   return [...new Set(result)].slice(0, 8);
 }
 
-function buildExcitesAnswer(company, role) {
-  return `I am excited to apply for the ${role} role at ${company} because it matches how I work: turning AI/ML ideas into reliable, usable systems. In my recent internship work, I built LLM-based conversational pipelines with Hugging Face Transformers and LangChain, integrated SQL-backed APIs, and deployed Dockerized real-time AI workflows. I am motivated by building production-ready systems that combine model quality, engineering reliability, and clear user value.`;
+function roleTheme(role) {
+  const lower = role.toLowerCase();
+  if (lower.includes('vision')) return 'vision';
+  if (lower.includes('research')) return 'research';
+  if (lower.includes('data') || lower.includes('analytics')) return 'data';
+  if (lower.includes('applied') || lower.includes('engineer') || lower.includes('software')) return 'engineering';
+  return 'ai';
 }
 
-function buildProudWorkAnswer() {
-  return `I am most proud of building an AI Chatbot SaaS platform and a real-time AI avatar pipeline.\n\n- AI Chatbot SaaS Platform\n  - Built a multi-tenant Python platform for conversational chatbot deployment\n  - Implemented retrieval-augmented response workflows using LangChain and embeddings\n  - GitHub: https://github.com/krishnamishra0i/AI-Chatbot-SaaS\n\n- AI Avatar pipeline\n  - Built STT -> LLM -> TTS -> lip-sync response flow\n  - Dockerized the full system for repeatable deployment and faster iteration\n\nI am also proud of my Face Verification Authentication project using Python, Flask, OpenCV, and TensorFlow for real-time identity matching.`;
+function roleEvidencePhrase(theme) {
+  const phrases = {
+    vision: 'My face verification project with Python, Flask, OpenCV, and TensorFlow',
+    research: 'My retrieval-augmented conversational workflow and evaluation work',
+    data: 'My scraping, pandas, and MySQL data pipeline work',
+    engineering: 'My API and Docker-based AI workflow work',
+    ai: 'My LLM conversational workflows with Hugging Face Transformers and LangChain'
+  };
+
+  return phrases[theme] || phrases.ai;
+}
+
+function buildExcitesAnswer(company, role, bullets) {
+  const theme = roleTheme(role);
+  const anchor = roleEvidencePhrase(theme);
+
+  const templates = {
+    vision: `I am excited about the ${role} role at ${company} because it aligns with my hands-on computer vision work and my interest in shipping systems that perform reliably in real time. I have built face verification with Python, Flask, OpenCV, and TensorFlow, and I enjoy turning model outputs into practical products. ${anchor} is the kind of work I want to keep doing in a role where accuracy, latency, and user experience all matter.`,
+    research: `I am excited about the ${role} role at ${company} because it matches my research-to-production mindset. I have worked on retrieval-augmented workflows, experiment-driven model validation, and LLM systems that need careful prompting and evaluation. ${anchor} is the kind of applied research execution I like most: making ideas measurable, testable, and useful.`,
+    data: `I am excited about the ${role} role at ${company} because it sits at the intersection of data, ML, and product delivery. I have built scraping, preprocessing, and SQL-backed workflows that turn raw data into something a system can use. ${anchor} is especially appealing because I like building pipelines that stay practical, maintainable, and visible to users.`,
+    engineering: `I am excited about the ${role} role at ${company} because it combines engineering quality with AI execution. I enjoy building end-to-end systems with APIs, Docker, and LLM workflows, then refining them until they are reliable enough to ship. ${anchor} is a strong fit for the kind of product-focused, iterative work I want to contribute to.`,
+    ai: `I am excited about the ${role} role at ${company} because it matches how I like to work: turning AI ideas into reliable, usable systems. I have built conversational AI workflows with Hugging Face Transformers and LangChain, integrated SQL-backed APIs, and deployed Dockerized automation. ${anchor} is the kind of practical work I want to keep doing with strong engineering discipline.`
+  };
+
+  return templates[theme] || templates.ai;
+}
+
+function buildProudWorkAnswer(role, bullets) {
+  const theme = roleTheme(role);
+  const anchor = roleEvidencePhrase(theme);
+
+  const templates = {
+    vision: `I am most proud of my Face Verification Authentication project and the way it combined detection, feature extraction, and real-time decision making.\n\n- Built face verification with Python, Flask, OpenCV, and TensorFlow.\n- Integrated model serving and containerized the stack with Docker.\n- Focused on reliable behavior in real usage, not just offline accuracy.\n\nThis work shows the same approach as ${anchor}.`,
+    research: `I am most proud of building retrieval-augmented conversational workflows and translating research ideas into practical systems.\n\n- Built LLM workflows with retrieval, prompt orchestration, and evaluation checks.\n- Applied NLP and deep learning methods to context-aware production-like systems.\n- Enjoyed validating behavior iteratively instead of relying on a single prompt.\n\nThis work shows the same approach as ${anchor}.`,
+    data: `I am most proud of completing an end-to-end data science workflow that moved from raw data to useful outputs.\n\n- Used requests, BeautifulSoup, pandas, and MySQL in a practical pipeline.\n- Cleaned and transformed data so it could support analysis and prediction.\n- Focused on turning data work into something measurable and dependable.\n\nThis work shows the same approach as ${anchor}.`,
+    engineering: `I am most proud of building practical AI features in cross-functional internship settings and shipping them in a reliable way.\n\n- Built multi-stage AI workflows with APIs and Dockerized deployment.\n- Used Git/GitHub collaboration to keep delivery structured and reviewable.\n- Balanced product speed with quality and maintainability.\n\nThis work shows the same approach as ${anchor}.`,
+    ai: `I am most proud of building an AI Chatbot SaaS platform and a real-time AI avatar pipeline.\n\n- Built a multi-tenant Python platform for conversational chatbot deployment.\n- Implemented retrieval-augmented response workflows using LangChain and embeddings.\n- Built STT -> LLM -> TTS -> lip-sync response flow and Dockerized the system.\n\nThis work shows the same approach as ${anchor}.`
+  };
+
+  return templates[theme] || templates.ai;
 }
 
 function buildEmail(company, role, url) {
@@ -113,8 +156,8 @@ function buildEmail(company, role, url) {
 
 function buildPack(row) {
   const bullets = buildRoleBullets(row.role);
-  const excite = buildExcitesAnswer(row.company, row.role);
-  const proud = buildProudWorkAnswer();
+  const excite = buildExcitesAnswer(row.company, row.role, bullets);
+  const proud = buildProudWorkAnswer(row.role, bullets);
   const emailText = buildEmail(row.company, row.role, row.url);
   const resumeToUse = row.suggestedResume || 'cv.md';
   const tailoredResume = `data/role-resumes/${packSlug(row)}.md`;

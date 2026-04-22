@@ -88,7 +88,11 @@ function matchFieldKey(text) {
   if (/(resume|cv|curriculum vitae)/.test(t)) return 'resume';
   if (/(linkedin)/.test(t)) return 'linkedin profile';
   if (/(github|git hub)/.test(t)) return 'github';
+  if (/(twitter|x\.com)/.test(t)) return 'twitter url';
+  if (/(google scholar|scholar profile|scholar)/.test(t)) return 'google scholar url';
+  if (/(design portfolio|portfolio url|portfolio link|behance|dribbble)/.test(t)) return 'design portfolio url';
   if (/(website|portfolio|personal site)/.test(t)) return 'website';
+  if (/(current company|current employer|present company|organization|organisation|company name)/.test(t)) return 'current company';
   if (/(years of experience|experience years|years? experience)/.test(t)) return 'years of experience';
   if (/(what excites you|why .*role|why us|motivat)/.test(t)) return 'what excites you about this role?';
   if (/(proud of|most proud|achievement|project you are proud)/.test(t)) return 'what work of yours are you most proud of?';
@@ -277,6 +281,51 @@ function composeUnknownQuestionAnswer(questionText, profile, answers, answerEntr
   return compactAnswer(generic);
 }
 
+function isKnownLongFormKey(key) {
+  const k = normalizeKey(key);
+  return [
+    'what excites you about this role',
+    'what work of yours are you most proud of',
+    'what is your most complex llm project',
+    'what do you optimize for in life',
+    'how intensely do you like working',
+    'what should we know about you'
+  ].includes(k);
+}
+
+function isStructuredShortField(key, label, field) {
+  const k = normalizeKey(key);
+  const l = normalizeKey(label);
+  const type = (field?.type || '').toLowerCase();
+
+  if (['email', 'url', 'tel', 'number', 'date', 'datetime-local'].includes(type)) return true;
+  if (field?.tagName === 'SELECT') return true;
+  if (field?.tagName === 'TEXTAREA') return false;
+
+  if (/(name|email|phone|linkedin|github|twitter|scholar|website|portfolio|location|country|city|company|experience|authorization|gender)/.test(k)) {
+    return true;
+  }
+  if (/(linkedin|github|twitter|x\.com|scholar|portfolio|website|company|location|phone|email)/.test(l)) {
+    return true;
+  }
+  return false;
+}
+
+function shouldGenerateDynamicAnswer(field, label, key = '') {
+  if (isStructuredShortField(key, label, field)) return false;
+
+  const type = (field?.type || '').toLowerCase();
+  const normalizedLabel = normalizeKey(label);
+  const normalizedKey = normalizeKey(key);
+
+  if (isKnownLongFormKey(normalizedKey)) return true;
+  if (field?.tagName === 'TEXTAREA') return true;
+  if (type !== 'text') return false;
+
+  // Only generate for clear essay-style prompts.
+  return /\?|describe|explain|tell us|tell me|why|what|how|challenge|project|experience/.test(normalizedLabel);
+}
+
 function fillRequiredFieldFallback(fields, profile, answers, answerEntries, stats) {
   let filled = 0;
 
@@ -355,7 +404,9 @@ function fillRequiredFieldFallback(fields, profile, answers, answerEntries, stat
     let value = sanitizeResolvedValue(key, resolveValue(key, answers, profile));
     if (!value) value = findAnswerByQuestionText(label, answerEntries);
     if (!value) value = fallbackAnswerForQuestion(label, profile, answers);
-    if (!value) value = composeUnknownQuestionAnswer(label, profile, answers, answerEntries);
+    if (!value && shouldGenerateDynamicAnswer(field, label, key)) {
+      value = composeUnknownQuestionAnswer(label, profile, answers, answerEntries);
+    }
     if (value) {
       setNativeValue(field, value);
       filled += 1;
@@ -373,6 +424,10 @@ function resolveValue(key, answers, profile) {
     github: 'github',
     website: 'website',
     portfolio: 'website',
+    'design portfolio url': 'portfolio',
+    'twitter url': 'twitter',
+    'google scholar url': 'google scholar',
+    'current company': 'current company',
     'years of experience': 'years',
     location: 'location',
     country: 'location',
@@ -399,6 +454,17 @@ function sanitizeResolvedValue(key, value) {
   const normalizedKey = normalizeKey(key);
   const raw = String(value || '').trim();
   if (!raw) return '';
+
+  const isUrlLikeKey = /(linkedin|github|twitter|scholar|website|portfolio|url)/.test(normalizedKey);
+  if (isUrlLikeKey) {
+    if (/^https?:\/\//i.test(raw)) return raw;
+    if (/^(linkedin|github|x|twitter)\.com\//i.test(raw)) return `https://${raw}`;
+    return '';
+  }
+
+  if (isStructuredShortField(normalizedKey, normalizedKey, { type: 'text', tagName: 'INPUT' }) && isLowSignalLongFormAnswer(raw)) {
+    return '';
+  }
 
   if ((normalizedKey === 'linkedin profile' || normalizedKey === 'linkedin') && /^linkedin$/i.test(raw)) return '';
   if (normalizedKey === 'github' && /^github$/i.test(raw)) return '';
@@ -448,6 +514,19 @@ function radioGroupForField(fields, field, label) {
 function fallbackAnswerForQuestion(label, profile, answers) {
   const t = String(label || '').toLowerCase();
   if (!t) return '';
+
+  if (/(current company|current employer|present company|organization|organisation|company name)/.test(t)) {
+    return answers?.['current company'] || profile?.currentCompany || '';
+  }
+  if (/(twitter|x\.com)/.test(t)) {
+    return answers?.['twitter url'] || profile?.twitter || '';
+  }
+  if (/(google scholar|scholar)/.test(t)) {
+    return answers?.['google scholar url'] || profile?.googleScholar || '';
+  }
+  if (/(design portfolio|portfolio url|portfolio link|behance|dribbble|website|personal site)/.test(t)) {
+    return answers?.['design portfolio url'] || profile?.portfolio || profile?.website || '';
+  }
 
   if (/(authorization to work|authori[sz]ation to work|authorized to work|work authorization)/.test(t)) {
     return answers?.['work authorization'] || 'Yes';
@@ -696,7 +775,11 @@ function classifyField(field) {
   if (/(resume|cv|curriculum vitae|upload cv|upload resume)/.test(text)) return 'resume';
   if (/(linkedin)/.test(text)) return 'linkedin profile';
   if (/(github|git hub)/.test(text)) return 'github';
+  if (/(twitter|x\.com)/.test(text)) return 'twitter url';
+  if (/(google scholar|scholar profile|scholar)/.test(text)) return 'google scholar url';
+  if (/(design portfolio|portfolio url|portfolio link|behance|dribbble)/.test(text)) return 'design portfolio url';
   if (/(website|portfolio|personal site|homepage)/.test(text)) return 'website';
+  if (/(current company|current employer|present company|organization|organisation|company name)/.test(text)) return 'current company';
   if (/(years of experience|experience years|years? experience|total experience)/.test(text)) return 'years of experience';
   if (/(location|country|where do you live|based in|city|state)/.test(text)) return 'location';
   if (/(authorization to work|authori[sz]ation to work|authorized to work|work authorization)/.test(text)) return 'work authorization';
@@ -798,7 +881,7 @@ function fillWithAnswers(answers, profile, stats) {
 
     if (!key) {
       // Out-of-box fallback: still answer unlabeled text prompts.
-      if (field.tagName === 'TEXTAREA' || lowerType === 'text') {
+      if (shouldGenerateDynamicAnswer(field, label)) {
         const unknownValue = composeUnknownQuestionAnswer(label, profile, answers, answerEntries);
         if (unknownValue) {
           setNativeValue(field, unknownValue);
@@ -825,7 +908,7 @@ function fillWithAnswers(answers, profile, stats) {
     if (!value) {
       value = fallbackAnswerForQuestion(label, profile, answers);
     }
-    if (!value && (field.tagName === 'TEXTAREA' || lowerType === 'text')) {
+    if (!value && shouldGenerateDynamicAnswer(field, label, key)) {
       value = composeUnknownQuestionAnswer(label, profile, answers, answerEntries);
     }
     value = sanitizeResolvedValue(key, value);
@@ -918,10 +1001,11 @@ function fillBasicFields(item, pack) {
     const raw = String(value || '').trim();
     if (!raw) return '';
     const lowered = raw.toLowerCase();
-    if (lowered === 'linkedin' || lowered === 'github') return '';
+    if (['linkedin', 'github', 'twitter', 'x', 'website', 'portfolio'].includes(lowered)) return '';
     if (/^https?:\/\//i.test(raw)) return raw;
     if (provider === 'linkedin' && raw.startsWith('linkedin.com/')) return `https://${raw}`;
     if (provider === 'github' && raw.startsWith('github.com/')) return `https://${raw}`;
+    if ((provider === 'twitter' || provider === 'x') && /^(x|twitter)\.com\//i.test(raw)) return `https://${raw}`;
     return raw;
   };
 
@@ -934,9 +1018,14 @@ function fillBasicFields(item, pack) {
     linkedin: normalizeProfileUrl(profile.linkedin, 'linkedin'),
     'linkedin profile': normalizeProfileUrl(profile.linkedin, 'linkedin'),
     github: normalizeProfileUrl(profile.github, 'github'),
+    'twitter url': normalizeProfileUrl(profile.twitter, 'twitter'),
+    'google scholar url': normalizeProfileUrl(profile.googleScholar || profile.scholar, ''),
+    'design portfolio url': normalizeProfileUrl(profile.portfolio || profile.website, ''),
+    website: normalizeProfileUrl(profile.website, ''),
     years: profile.years || '0-2',
     'years of experience': profile.years || '0-2',
     location: profile.location || 'India',
+    'current company': profile.currentCompany || '',
     'work authorization': profile.workAuthorization || 'Yes',
     'applied ai track': profile.appliedAiTrack || 'AAIE | Forward Deployed',
     'what languages are you fluent in?': profile.languages || 'English, Hindi',

@@ -5,12 +5,18 @@ import { execFileSync } from 'child_process';
 import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import path from 'path';
+import yaml from 'js-yaml';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOT = __dirname;
 const PORT = Number(process.env.CAREER_OPS_EXTENSION_PORT || 3030);
 const DEFAULT_MIN_PRIORITY = Number(process.env.CAREER_OPS_MIN_PRIORITY || 55);
+const SEARCH_RESULTS_WANTED = Number(process.env.CAREER_OPS_SEARCH_RESULTS_WANTED || 20);
+const SEARCH_PROFILE = String(process.env.CAREER_OPS_SEARCH_PROFILE || 'focused').trim() || 'focused';
+const SEARCH_SOURCES = String(process.env.CAREER_OPS_SEARCH_SOURCES || 'jobspy').trim() || 'jobspy';
+const SEARCH_HOURS_OLD = Number(process.env.CAREER_OPS_SEARCH_HOURS_OLD || 168);
+const SEARCH_TIMEOUT_MS = Number(process.env.CAREER_OPS_SEARCH_TIMEOUT_MS || 180000);
 const REFRESH_COOLDOWN_MS = {
   queue: Number(process.env.CAREER_OPS_QUEUE_REFRESH_COOLDOWN_MS || 2 * 60 * 1000),
   search: Number(process.env.CAREER_OPS_SEARCH_REFRESH_COOLDOWN_MS || 15 * 60 * 1000)
@@ -27,16 +33,100 @@ const FOLLOWUPS_PATH = path.join(ROOT, 'data/followups.md');
 const DASHBOARD_PATH = path.join(ROOT, 'data/daily-dashboard.md');
 const APPLICATION_INDEX_PATH = path.join(ROOT, 'data/application-packs/INDEX.md');
 const BULK_ATS_PATH = path.join(ROOT, 'data/ats-scores/BULK.md');
+const JOBSPY_OUTPUT_DIR = path.join(ROOT, 'data/jobspy-research');
+const PROFILE_CONFIG_PATH = path.join(ROOT, 'config/profile.yml');
 
-const PROFILE = {
+const DEFAULT_PROFILE = {
   name: 'Sri Krishna Mishra',
   email: 'srikrishnamishra006@gmail.com',
   phone: '+91 9905582516',
   location: 'India',
-  linkedin: 'LinkedIn',
-  github: 'GitHub',
-  years: '0-2'
+  linkedin: '',
+  github: 'https://github.com/krishnamishra0i',
+  website: '',
+  portfolio: '',
+  twitter: '',
+  googleScholar: '',
+  currentCompany: 'Lms Athena',
+  years: '0-2',
+  languages: 'English, Hindi',
+  workAuthorization: 'Yes',
+  appliedAiTrack: 'AAIE | Forward Deployed',
+  genderIdentity: 'Prefer not to respond'
 };
+
+function normalizeProfileUrl(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (/^https?:\/\//i.test(raw)) return raw;
+  if (/^[a-z0-9.-]+\.[a-z]{2,}\//i.test(raw)) return `https://${raw}`;
+  return '';
+}
+
+function normalizeLocation(candidateLocation, locationSection) {
+  const direct = String(candidateLocation || '').trim();
+  if (direct) return direct;
+  const city = String(locationSection?.city || '').trim();
+  const country = String(locationSection?.country || '').trim();
+  return [city, country].filter(Boolean).join(', ') || DEFAULT_PROFILE.location;
+}
+
+function inferWorkAuthorization(locationSection) {
+  const visa = String(locationSection?.visa_status || '').toLowerCase();
+  if (!visa) return DEFAULT_PROFILE.workAuthorization;
+  if (visa.includes('no sponsorship') || visa.includes('authorized')) return 'Yes';
+  if (visa.includes('need sponsorship') || visa.includes('requires sponsorship')) return 'No';
+  return DEFAULT_PROFILE.workAuthorization;
+}
+
+function loadProfileFromConfig() {
+  if (!existsSync(PROFILE_CONFIG_PATH)) {
+    return { profile: DEFAULT_PROFILE, source: 'default' };
+  }
+
+  try {
+    const raw = readFileSync(PROFILE_CONFIG_PATH, 'utf-8');
+    const parsed = yaml.load(raw) || {};
+    const candidate = parsed?.candidate || {};
+    const locationSection = parsed?.location || {};
+
+    // Ignore untouched template profile values.
+    const templateEmail = String(candidate?.email || '').trim().toLowerCase() === 'jane@example.com';
+    const templateName = String(candidate?.full_name || '').trim().toLowerCase() === 'jane smith';
+    if (templateEmail && templateName) {
+      return { profile: DEFAULT_PROFILE, source: 'default-template' };
+    }
+
+    const merged = {
+      ...DEFAULT_PROFILE,
+      name: String(candidate?.full_name || DEFAULT_PROFILE.name).trim() || DEFAULT_PROFILE.name,
+      email: String(candidate?.email || DEFAULT_PROFILE.email).trim() || DEFAULT_PROFILE.email,
+      phone: String(candidate?.phone || DEFAULT_PROFILE.phone).trim() || DEFAULT_PROFILE.phone,
+      location: normalizeLocation(candidate?.location, locationSection),
+      linkedin: normalizeProfileUrl(candidate?.linkedin),
+      github: normalizeProfileUrl(candidate?.github),
+      website: normalizeProfileUrl(candidate?.portfolio_url),
+      portfolio: normalizeProfileUrl(candidate?.portfolio_url),
+      twitter: normalizeProfileUrl(candidate?.twitter),
+      currentCompany: String(candidate?.current_company || DEFAULT_PROFILE.currentCompany).trim() || DEFAULT_PROFILE.currentCompany,
+      years: String(candidate?.years || DEFAULT_PROFILE.years).trim() || DEFAULT_PROFILE.years,
+      languages: Array.isArray(candidate?.languages)
+        ? candidate.languages.filter(Boolean).join(', ')
+        : String(candidate?.languages || DEFAULT_PROFILE.languages).trim() || DEFAULT_PROFILE.languages,
+      workAuthorization: String(candidate?.work_authorization || inferWorkAuthorization(locationSection)).trim() || DEFAULT_PROFILE.workAuthorization,
+      appliedAiTrack: String(candidate?.applied_ai_track || DEFAULT_PROFILE.appliedAiTrack).trim() || DEFAULT_PROFILE.appliedAiTrack,
+      genderIdentity: String(candidate?.gender_identity || DEFAULT_PROFILE.genderIdentity).trim() || DEFAULT_PROFILE.genderIdentity,
+      googleScholar: normalizeProfileUrl(candidate?.google_scholar)
+    };
+
+    return { profile: merged, source: 'config/profile.yml' };
+  } catch (err) {
+    console.warn(`Failed to parse ${PROFILE_CONFIG_PATH}: ${err?.message || String(err)}`);
+    return { profile: DEFAULT_PROFILE, source: 'default-parse-error' };
+  }
+}
+
+const { profile: PROFILE, source: PROFILE_SOURCE } = loadProfileFromConfig();
 
 function json(res, code, payload) {
   res.writeHead(code, {
@@ -179,7 +269,8 @@ function parseBulkAtsMap() {
     const cols = line.split('|').map((c) => c.trim()).filter(Boolean);
     if (cols.length < 9) continue;
 
-    const ats = Number(cols[1]);
+    const atsRaw = String(cols[1] || '').trim();
+    const ats = atsRaw === '-' ? 0 : Number(atsRaw);
     const priority = Number(cols[4]);
     const pack = cols[8];
     if (!pack) continue;
@@ -400,9 +491,87 @@ function runQueueRefresh(count = 10) {
   execFileSync(process.execPath, [path.join(ROOT, 'generate-daily-dashboard.mjs')], { cwd: ROOT, stdio: 'inherit' });
 }
 
-function runSearchRefresh(count = 10) {
-  execFileSync(process.execPath, [path.join(ROOT, 'scan.mjs')], { cwd: ROOT, stdio: 'inherit' });
+function searchConfigForQuality(quality = 'balanced') {
+  const q = String(quality || 'balanced').trim().toLowerCase();
+  if (q === 'strict') {
+    return {
+      quality: 'strict',
+      profile: 'focused',
+      sources: 'jobspy',
+      hoursOld: 72,
+      resultsWanted: 15,
+      strictRelevance: true
+    };
+  }
+  if (q === 'broad') {
+    return {
+      quality: 'broad',
+      profile: 'broad',
+      sources: 'jobspy',
+      hoursOld: 336,
+      resultsWanted: 35,
+      strictRelevance: false
+    };
+  }
+  return {
+    quality: 'balanced',
+    profile: SEARCH_PROFILE,
+    sources: SEARCH_SOURCES,
+    hoursOld: SEARCH_HOURS_OLD,
+    resultsWanted: SEARCH_RESULTS_WANTED,
+    strictRelevance: true
+  };
+}
+
+function runSearchRefresh(count = 10, searchTerm = '', quality = 'balanced') {
+  const pythonBin = process.env.CAREER_OPS_PYTHON || path.join(ROOT, '..', '.venv', 'bin', 'python');
+  const cfg = searchConfigForQuality(quality);
+  const meta = {
+    strategy: 'unknown',
+    discovered: 0,
+    query: String(searchTerm || '').trim(),
+    quality: cfg.quality
+  };
+  try {
+    const args = [
+      path.join(ROOT, 'research-jobs.py'),
+      '--profile', cfg.profile,
+      '--sources', cfg.sources,
+      '--hours-old', String(cfg.hoursOld),
+      '--results-wanted', String(cfg.resultsWanted),
+      '--write-pipeline'
+    ];
+    if (cfg.strictRelevance) {
+      args.push('--strict-relevance');
+    }
+    const query = String(searchTerm || '').trim();
+    if (query) {
+      args.push('--search-term', query);
+    }
+    const output = execFileSync(pythonBin, args, {
+      cwd: ROOT,
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: SEARCH_TIMEOUT_MS
+    });
+    if (output) process.stdout.write(output);
+    const strategyMatch = String(output || '').match(/\[JobSpy\] strategy:\s*(.+)/);
+    const countMatch = String(output || '').match(/\[JobSpy\] new jobs:\s*(\d+)/);
+    if (strategyMatch?.[1]) meta.strategy = strategyMatch[1].trim();
+    if (countMatch?.[1]) meta.discovered = Number(countMatch[1]);
+  } catch (err) {
+    if (err?.stdout) process.stdout.write(String(err.stdout));
+    if (err?.stderr) process.stderr.write(String(err.stderr));
+    console.warn(`JobSpy research skipped: ${err?.message || String(err)}`);
+  }
+
+  try {
+    execFileSync(process.execPath, [path.join(ROOT, 'scan.mjs')], { cwd: ROOT, stdio: 'inherit' });
+  } catch (err) {
+    console.warn(`Portal scan failed: ${err?.message || String(err)}`);
+  }
   runQueueRefresh(count);
+  return meta;
 }
 
 async function handleMark(body, res) {
@@ -448,11 +617,15 @@ async function handleRefresh(body, res) {
   }
 
   if (mode === 'search') {
-    runSearchRefresh(count);
+    const research = runSearchRefresh(
+      count,
+      body.searchTerm || body.query || body.keyword || '',
+      body.searchQuality || body.quality || 'balanced'
+    );
     const stats = getStats();
     cache.at = now;
     cache.stats = stats;
-    return json(res, 200, { ok: true, mode: 'search', stats });
+    return json(res, 200, { ok: true, mode: 'search', stats, research });
   }
 
   runQueueRefresh(count);
@@ -553,7 +726,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === 'GET' && url.pathname === '/api/profile') {
-      return json(res, 200, { ok: true, profile: PROFILE });
+      return json(res, 200, { ok: true, profile: PROFILE, source: PROFILE_SOURCE });
     }
 
     if (req.method === 'GET' && url.pathname === '/api/stats') {
